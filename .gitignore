@@ -1,0 +1,21 @@
+__pycache__/
+**/__pycache__/
+*.pyc
+pred/
+pred_e/
+result/
+run.log
+results.tsv
+*.swp
+
+# --- cleanup/cuda-only: untracked data & scratch ---
+*.log
+benchmark/RAG_exp/*.jsonl
+!benchmark/RAG_exp/nq-open-10_0.jsonl
+.claude/scheduled_tasks.lock
+
+# LongBench eval data — external (download from THUDM/LongBench, loaded from
+# disk at benchmark/Longbench_exp/LongBench/<task>); never commit it (a local
+# symlink or copy is fine).
+benchmark/Longbench_exp/LongBench
+._*

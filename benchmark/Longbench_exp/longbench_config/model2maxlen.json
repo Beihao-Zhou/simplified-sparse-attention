@@ -1,0 +1,14 @@
+{
+    "llama-3.2-1b": 130560,
+    "qwen2-7b-instruct": 31500,
+    "gsa-pt-qwen2-chunk8": 31500,
+    "gsa-pt-qwen2-chunk16": 31500,
+    "gsa-pt-qwen2-chunk32": 31500,
+    "gsa-pt-qwen2-chunk4-chunk4": 31500,
+    "gsa-pt-qwen2-chunk8-chunk4": 31500,
+    "gsa-ft-qwen2-chunk8": 31500,
+    "gsa-ft-qwen2-chunk16": 31500,
+    "gsa-ft-qwen2-chunk32": 31500,
+    "gsa-ft-qwen2-chunk4-chunk4": 31500,
+    "gsa-ft-qwen2-chunk8-chunk4": 31500
+}
