@@ -57,27 +57,27 @@ class _DecodeKernelStepCache:
             return cls
         cls.input_ids_ref = input_ids
         cls.k_len = k_len
-        cls.c0_i32 = cache.chunk_ids[0][0].to(torch.int32).contiguous()
-        cls.is_gist_u8 = cache.is_gist_full[0].to(torch.uint8).contiguous()
-        cls.is_l0_u8 = cache.is_gist_per_level[0][0].to(torch.uint8).contiguous()
+        cls.c0_i32 = cache.chunk_ids[0].to(torch.int32).contiguous()
+        cls.is_gist_u8 = cache.is_gist_full.to(torch.uint8).contiguous()
+        cls.is_l0_u8 = cache.is_gist_per_level[0].to(torch.uint8).contiguous()
         if cache.num_levels >= 2:
-            cls.c1_i32 = cache.chunk_ids[1][0].to(torch.int32).contiguous()
-            cls.is_l1_u8 = cache.is_gist_per_level[1][0].to(torch.uint8).contiguous()
+            cls.c1_i32 = cache.chunk_ids[1].to(torch.int32).contiguous()
+            cls.is_l1_u8 = cache.is_gist_per_level[1].to(torch.uint8).contiguous()
         else:
             # Single-level: no meta-gist. No-op level-1 for the kernel (is_l1=0 masks
             # the level-1 keep term; c1=0 keeps sel1[g, c1[k]] in-bounds at G1p1=1).
             _dev = cache.is_gist_full.device
-            cls.c1_i32 = torch.zeros(k_len, dtype=torch.int32, device=_dev)
-            cls.is_l1_u8 = torch.zeros(k_len, dtype=torch.uint8, device=_dev)
+            cls.c1_i32 = torch.zeros((cache.B, k_len), dtype=torch.int32, device=_dev)
+            cls.is_l1_u8 = torch.zeros((cache.B, k_len), dtype=torch.uint8, device=_dev)
         # `compressed` is identical across all layers in a step (depends only on
         # last_gist/start_idx/k_len) — compute it ONCE here on rebuild instead of
         # per-layer in the hot path (saves ~27 redundant arange+compare launches/step).
         k_idx = torch.arange(k_len, device=cache.is_gist_full.device)
-        after_last_key = k_idx > cache.last_gist[0]
-        compressed_row = (~after_last_key) & (k_idx >= cache.start_idx[0])
+        after_last_key = k_idx[None, :] > cache.last_gist[:, None]
+        compressed_row = (~after_last_key) & (k_idx[None, :] >= cache.start_idx[:, None])
         cls.comp_u8 = compressed_row.to(torch.uint8).contiguous()
-        cls.am_u8 = (attention_mask[0, 0, 0, :] > -1e-4).to(torch.uint8).contiguous()
-        cls.causal_bias = causal_mask[0, 0, 0, :].float().contiguous()
+        cls.am_u8 = (attention_mask.expand(cache.B, -1, -1, -1)[:, 0, 0, :] > -1e-4).to(torch.uint8).contiguous()
+        cls.causal_bias = causal_mask.expand(cache.B, -1, -1, -1)[:, 0, 0, :].float().contiguous()
         return cls
 
 
@@ -364,10 +364,10 @@ def _get_select_pg_compiled():
 
 
 def _select_per_group(query, cache, num_kv, hpg, top_k, top_p, num_levels, device):
-    """Per-GQA-group hierarchical selection (decode, B=1, qb=1).
+    """Per-GQA-group hierarchical selection (decode, qb=1).
     Scores num_kv groups against num_kv-head bf16 gist-K (÷H/num_kv bytes vs the
     per-head fp64 path), aggregates the hpg group heads, top-k per group, with the
-    L1→L0 parent constraint. Returns sel_any[level] = [num_kv, Gmax+1] bool — the
+    L1→L0 parent constraint. Returns sel_any[level] = [B,num_kv,Gmax+1] bool — the
     per-group selected-chunk mask the CUDA kernel consumes directly (no union)."""
     B = query.shape[0]
     d = query.shape[-1]
@@ -499,15 +499,6 @@ def _decode_forward(module, query, key, value, attention_mask, scaling, dropout,
             f"sparse_attention_forward decode supports 1- or 2-level gists "
             f"(got num_levels={num_levels}); use the eager path (ATTN_IMPL=ref)."
         )
-    # The decode kernel + per-step caches are batch-1 (the kernel returns [1,1,H,D]
-    # and the caches index batch 0). Fail loudly rather than silently dropping
-    # samples for B>1; use the eager path for batched generation.
-    if B != 1:
-        raise NotImplementedError(
-            f"sparse_attention_forward decode is batch-1 only (got B={B}); "
-            f"use the eager path (ATTN_IMPL=ref) for batched generation."
-        )
-
     # ----- Cache lookup / refresh / extend -----
     cache: Optional[_GistDecodeCache] = getattr(module, "_gist_decode_cache", None)
 
@@ -638,15 +629,15 @@ def _decode_forward(module, query, key, value, attention_mask, scaling, dropout,
         # Single-level: feed a no-op level-1 selection (1 dummy chunk, never kept —
         # is_l1=0 in the step-cache masks the (is_l1g & sel1) term; c1=0 keeps the
         # sel1[g, c1[k]] read in-bounds at G1p1=1).
-        _dummy_sel1 = torch.zeros((num_kv_heads, 1), dtype=torch.uint8, device=device)
+        _dummy_sel1 = torch.zeros((B, num_kv_heads, 1), dtype=torch.uint8, device=device)
         if sel_any_per_level is not None:
             # Per-group selection already produced [num_kv, Gmax+1] directly. The
             # compiled path already returns contiguous uint8 (in-graph cast), so skip
             # the redundant cast/copy launches when possible (Rank 3).
-            _s0 = sel_any_per_level[0][0]
+            _s0 = sel_any_per_level[0]
             sel0_any = _s0 if (_s0.dtype == torch.uint8 and _s0.is_contiguous()) else _s0.to(torch.uint8).contiguous()
             if _need_l1:
-                _s1 = sel_any_per_level[1][0]
+                _s1 = sel_any_per_level[1]
                 sel1_any = _s1 if (_s1.dtype == torch.uint8 and _s1.is_contiguous()) else _s1.to(torch.uint8).contiguous()
             else:
                 sel1_any = _dummy_sel1
@@ -654,11 +645,11 @@ def _decode_forward(module, query, key, value, attention_mask, scaling, dropout,
             # head mode = the paper's grouped unfolding (§3.3): per-head top-k, then OR
             # (union) within the GQA group. This matches the eager reference's selected
             # set, so the end-to-end output is allclose to eager (unlike `group` above).
-            sel0_any = (selected_chunks_per_level[0][0, :, 0, :]
-                        .view(num_kv_heads, hpg, -1).any(dim=1).to(torch.uint8).contiguous())
+            sel0_any = (selected_chunks_per_level[0][:, :, 0, :]
+                        .reshape(B, num_kv_heads, hpg, -1).any(dim=2).to(torch.uint8).contiguous())
             if _need_l1:
-                sel1_any = (selected_chunks_per_level[1][0, :, 0, :]
-                            .view(num_kv_heads, hpg, -1).any(dim=1).to(torch.uint8).contiguous())
+                sel1_any = (selected_chunks_per_level[1][:, :, 0, :]
+                            .reshape(B, num_kv_heads, hpg, -1).any(dim=2).to(torch.uint8).contiguous())
             else:
                 sel1_any = _dummy_sel1
         # [k_len]-derived inputs are identical across layers in a step → cache once.
