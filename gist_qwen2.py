@@ -1043,6 +1043,7 @@ class GistQwen2Attention(Qwen2Attention):
             scaling=self.scaling,
             decode=decode,
             chunk_q=512,
+            gsa_kv_cache=past_key_values,
             **kwargs,
         )
         # ==========================================================================

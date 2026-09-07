@@ -110,6 +110,16 @@ Useful inference knobs:
 | `DECODE_SELECT` | `head` | `head` = per-head top-k then union within the GQA group (the paper's grouped unfolding; allclose to the eager reference). `group` = sum the group heads' scores, one top-k per group (a different, cheaper selection; F1-validated, not allclose). Same tpot uncompiled; pair `group` with `DECODE_COMPILE` for a lower tpot floor. |
 | `DECODE_COMPILE` | `0` | Enables torch.compile for lower decode launch overhead. |
 | `DECODE_GMAX_BUCKET` | `0` | Buckets decode shapes to improve graph reuse when compilation is enabled. |
+Pass `GistOffloadCache` as `past_key_values` to keep full sparse-layer KV in
+pinned CPU memory. Set its `hot_buffer_size` to enable the persistent
+per-layer/KV-group GPU LRU buffer; it must fit the largest selected set.
+
+Run the focused hot-buffer correctness, operator, end-to-end, and sanitizer gate
+on a CUDA machine with:
+
+```bash
+bash analysis/run_hot_buffer_experiments.sh
+```
 
 Training starts with continued pretraining, then selective finetuning:
 

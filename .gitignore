@@ -7,6 +7,7 @@ result/
 run.log
 results.tsv
 *.swp
+.DS_Store
 
 # --- cleanup/cuda-only: untracked data & scratch ---
 *.log
@@ -19,3 +20,13 @@ benchmark/RAG_exp/*.jsonl
 # symlink or copy is fine).
 benchmark/Longbench_exp/LongBench
 ._*
+
+# selection traces (large, regenerate with analysis/record_selection.py)
+analysis/traces/
+analysis/prompts/
+
+# Generated reports, benchmark outputs, and local validation handoffs
+analysis/results/
+*_REPORT.md
+*_report.md
+.local-reports/

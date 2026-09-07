@@ -57,27 +57,27 @@ class _DecodeKernelStepCache:
             return cls
         cls.input_ids_ref = input_ids
         cls.k_len = k_len
-        cls.c0_i32 = cache.chunk_ids[0][0].to(torch.int32).contiguous()
-        cls.is_gist_u8 = cache.is_gist_full[0].to(torch.uint8).contiguous()
-        cls.is_l0_u8 = cache.is_gist_per_level[0][0].to(torch.uint8).contiguous()
+        cls.c0_i32 = cache.chunk_ids[0].to(torch.int32).contiguous()
+        cls.is_gist_u8 = cache.is_gist_full.to(torch.uint8).contiguous()
+        cls.is_l0_u8 = cache.is_gist_per_level[0].to(torch.uint8).contiguous()
         if cache.num_levels >= 2:
-            cls.c1_i32 = cache.chunk_ids[1][0].to(torch.int32).contiguous()
-            cls.is_l1_u8 = cache.is_gist_per_level[1][0].to(torch.uint8).contiguous()
+            cls.c1_i32 = cache.chunk_ids[1].to(torch.int32).contiguous()
+            cls.is_l1_u8 = cache.is_gist_per_level[1].to(torch.uint8).contiguous()
         else:
             # Single-level: no meta-gist. No-op level-1 for the kernel (is_l1=0 masks
             # the level-1 keep term; c1=0 keeps sel1[g, c1[k]] in-bounds at G1p1=1).
             _dev = cache.is_gist_full.device
-            cls.c1_i32 = torch.zeros(k_len, dtype=torch.int32, device=_dev)
-            cls.is_l1_u8 = torch.zeros(k_len, dtype=torch.uint8, device=_dev)
+            cls.c1_i32 = torch.zeros((cache.B, k_len), dtype=torch.int32, device=_dev)
+            cls.is_l1_u8 = torch.zeros((cache.B, k_len), dtype=torch.uint8, device=_dev)
         # `compressed` is identical across all layers in a step (depends only on
         # last_gist/start_idx/k_len) — compute it ONCE here on rebuild instead of
         # per-layer in the hot path (saves ~27 redundant arange+compare launches/step).
         k_idx = torch.arange(k_len, device=cache.is_gist_full.device)
-        after_last_key = k_idx > cache.last_gist[0]
-        compressed_row = (~after_last_key) & (k_idx >= cache.start_idx[0])
+        after_last_key = k_idx[None, :] > cache.last_gist[:, None]
+        compressed_row = (~after_last_key) & (k_idx[None, :] >= cache.start_idx[:, None])
         cls.comp_u8 = compressed_row.to(torch.uint8).contiguous()
-        cls.am_u8 = (attention_mask[0, 0, 0, :] > -1e-4).to(torch.uint8).contiguous()
-        cls.causal_bias = causal_mask[0, 0, 0, :].float().contiguous()
+        cls.am_u8 = (attention_mask.expand(cache.B, -1, -1, -1)[:, 0, 0, :] > -1e-4).to(torch.uint8).contiguous()
+        cls.causal_bias = causal_mask.expand(cache.B, -1, -1, -1)[:, 0, 0, :].float().contiguous()
         return cls
 
 
@@ -190,7 +190,13 @@ def _build_full_cache(
         # repeat to [B,H,Gmax,d] (cheap: Gmax << k_len). gist_pos is per-batch
         # (same across heads), so the gather index is [B,num_kv,Gmax,d].
         gist_gather_kv = gist_pos_safe[:, None, :, None].expand(B, num_kv, Gmax, d)
-        K_gist_kv = key.gather(dim=2, index=gist_gather_kv)         # [B,num_kv,Gmax,d]
+        if key.device != device:
+            # Offload cache: K is a pinned-host view. Only the Gmax gist keys are
+            # needed for selection, so gather on the host and ship those (Gmax is
+            # ~k_len/chunk_size, not k_len) instead of faulting the whole context.
+            K_gist_kv = key.gather(dim=2, index=gist_gather_kv.to(key.device)).to(device)
+        else:
+            K_gist_kv = key.gather(dim=2, index=gist_gather_kv)     # [B,num_kv,Gmax,d]
         # Per-group gist-K (num_kv heads, bf16, transposed) for per-group scoring
         # reads num_kv heads not H (÷H/num_kv bytes). Only built when needed.
         if os.environ.get("DECODE_SELECT", "head") == "group":
@@ -364,10 +370,10 @@ def _get_select_pg_compiled():
 
 
 def _select_per_group(query, cache, num_kv, hpg, top_k, top_p, num_levels, device):
-    """Per-GQA-group hierarchical selection (decode, B=1, qb=1).
+    """Per-GQA-group hierarchical selection (decode, qb=1).
     Scores num_kv groups against num_kv-head bf16 gist-K (÷H/num_kv bytes vs the
     per-head fp64 path), aggregates the hpg group heads, top-k per group, with the
-    L1→L0 parent constraint. Returns sel_any[level] = [num_kv, Gmax+1] bool — the
+    L1→L0 parent constraint. Returns sel_any[level] = [B,num_kv,Gmax+1] bool — the
     per-group selected-chunk mask the CUDA kernel consumes directly (no union)."""
     B = query.shape[0]
     d = query.shape[-1]
@@ -463,6 +469,17 @@ def _select_per_group(query, cache, num_kv, hpg, top_k, top_p, num_levels, devic
     return sel_any
 
 
+def _regular_kv(t):
+    """True when [B, num_kv, k_len, D] is a regular view the operator can index.
+
+    Rows must be unit-stride and D-strided, and the batch stride must be exactly
+    num_kv KV planes, so a single plane stride describes the whole layout.
+    """
+    return (t.stride(3) == 1 and t.stride(2) == t.shape[3]
+            and t.stride(1) % t.shape[3] == 0
+            and t.stride(0) == t.shape[1] * t.stride(1))
+
+
 def _decode_forward(module, query, key, value, attention_mask, scaling, dropout, **kwargs):
     # NOTE: do NOT repeat_kv here — the kernel path uses the un-repeated K/V.
     # repeat_kv materializes a [B,H,k_len,d] copy (~hundreds of MB at large
@@ -499,15 +516,6 @@ def _decode_forward(module, query, key, value, attention_mask, scaling, dropout,
             f"sparse_attention_forward decode supports 1- or 2-level gists "
             f"(got num_levels={num_levels}); use the eager path (ATTN_IMPL=ref)."
         )
-    # The decode kernel + per-step caches are batch-1 (the kernel returns [1,1,H,D]
-    # and the caches index batch 0). Fail loudly rather than silently dropping
-    # samples for B>1; use the eager path for batched generation.
-    if B != 1:
-        raise NotImplementedError(
-            f"sparse_attention_forward decode is batch-1 only (got B={B}); "
-            f"use the eager path (ATTN_IMPL=ref) for batched generation."
-        )
-
     # ----- Cache lookup / refresh / extend -----
     cache: Optional[_GistDecodeCache] = getattr(module, "_gist_decode_cache", None)
 
@@ -638,15 +646,15 @@ def _decode_forward(module, query, key, value, attention_mask, scaling, dropout,
         # Single-level: feed a no-op level-1 selection (1 dummy chunk, never kept —
         # is_l1=0 in the step-cache masks the (is_l1g & sel1) term; c1=0 keeps the
         # sel1[g, c1[k]] read in-bounds at G1p1=1).
-        _dummy_sel1 = torch.zeros((num_kv_heads, 1), dtype=torch.uint8, device=device)
+        _dummy_sel1 = torch.zeros((B, num_kv_heads, 1), dtype=torch.uint8, device=device)
         if sel_any_per_level is not None:
             # Per-group selection already produced [num_kv, Gmax+1] directly. The
             # compiled path already returns contiguous uint8 (in-graph cast), so skip
             # the redundant cast/copy launches when possible (Rank 3).
-            _s0 = sel_any_per_level[0][0]
+            _s0 = sel_any_per_level[0]
             sel0_any = _s0 if (_s0.dtype == torch.uint8 and _s0.is_contiguous()) else _s0.to(torch.uint8).contiguous()
             if _need_l1:
-                _s1 = sel_any_per_level[1][0]
+                _s1 = sel_any_per_level[1]
                 sel1_any = _s1 if (_s1.dtype == torch.uint8 and _s1.is_contiguous()) else _s1.to(torch.uint8).contiguous()
             else:
                 sel1_any = _dummy_sel1
@@ -654,11 +662,11 @@ def _decode_forward(module, query, key, value, attention_mask, scaling, dropout,
             # head mode = the paper's grouped unfolding (§3.3): per-head top-k, then OR
             # (union) within the GQA group. This matches the eager reference's selected
             # set, so the end-to-end output is allclose to eager (unlike `group` above).
-            sel0_any = (selected_chunks_per_level[0][0, :, 0, :]
-                        .view(num_kv_heads, hpg, -1).any(dim=1).to(torch.uint8).contiguous())
+            sel0_any = (selected_chunks_per_level[0][:, :, 0, :]
+                        .reshape(B, num_kv_heads, hpg, -1).any(dim=2).to(torch.uint8).contiguous())
             if _need_l1:
-                sel1_any = (selected_chunks_per_level[1][0, :, 0, :]
-                            .view(num_kv_heads, hpg, -1).any(dim=1).to(torch.uint8).contiguous())
+                sel1_any = (selected_chunks_per_level[1][:, :, 0, :]
+                            .reshape(B, num_kv_heads, hpg, -1).any(dim=2).to(torch.uint8).contiguous())
             else:
                 sel1_any = _dummy_sel1
         # [k_len]-derived inputs are identical across layers in a step → cache once.
@@ -667,19 +675,48 @@ def _decode_forward(module, query, key, value, attention_mask, scaling, dropout,
         nsplit = int(os.environ.get("DECODE_NSPLIT", "128"))
         ext = _get_sparse_decode_ext()
         qc = query if query.is_contiguous() else query.contiguous()
-        kc = key if key.is_contiguous() else key.contiguous()
-        vc = value if value.is_contiguous() else value.contiguous()
+        # Offload cache K/V are pinned-host views of a longer ring buffer, so
+        # they are deliberately NOT made contiguous (that would copy the whole
+        # context out of pinned memory every step). The operator takes the two
+        # host strides it needs instead.
+        _offloaded = not key.is_cuda
+        # A regular [B, num_kv, k_len, D] view of a longer ring buffer is handed
+        # to the operator as-is: it takes the KV-plane stride. Calling
+        # .contiguous() here would copy the whole context out of the ring (or out
+        # of pinned host memory) on every single decode step.
+        kc = key if _regular_kv(key) else key.contiguous()
+        vc = value if _regular_kv(value) else value.contiguous()
         # cap = k_len → the compaction can NEVER drop a selected key (the attention
         # kernel derives its per-group split width from the on-device count, so
         # occupancy is independent of cap). Bulletproof vs the worst-case group-union
         # union / long-suffix edge cases. The compact decode = parallel
         # warp-aggregated compaction + per-group shared-mem tiling.
         cap = k_len
-        out = ext.sparse_decode_attn_compact(
-            qc, kc, vc, sel0_any, sel1_any, sc.c0_i32, sc.c1_i32,
-            sc.is_gist_u8, sc.is_l0_u8, sc.is_l1_u8, sc.comp_u8, sc.am_u8,
-            sc.causal_bias, scaling, nsplit, cap,
-        )
+        if _offloaded:
+            kv_cache = kwargs.get("gsa_kv_cache")
+            hot_state = (kv_cache.hot_state(module.layer_idx, device)
+                         if hasattr(kv_cache, "hot_state") else None)
+            if hot_state is not None:
+                out = ext.sparse_decode_attn_offload_cached(
+                    qc, kc, vc, *hot_state,
+                    sel0_any, sel1_any, sc.c0_i32, sc.c1_i32,
+                    sc.is_gist_u8, sc.is_l0_u8, sc.is_l1_u8,
+                    sc.comp_u8, sc.am_u8, sc.causal_bias,
+                    scaling, nsplit, cap,
+                )
+            else:
+                # async_gather=-1 defers to GSA_ASYNC_GATHER (default: sync path).
+                out = ext.sparse_decode_attn_offload(
+                    qc, kc, vc, sel0_any, sel1_any, sc.c0_i32, sc.c1_i32,
+                    sc.is_gist_u8, sc.is_l0_u8, sc.is_l1_u8, sc.comp_u8, sc.am_u8,
+                    sc.causal_bias, scaling, nsplit, cap, -1,
+                )
+        else:
+            out = ext.sparse_decode_attn_compact(
+                qc, kc, vc, sel0_any, sel1_any, sc.c0_i32, sc.c1_i32,
+                sc.is_gist_u8, sc.is_l0_u8, sc.is_l1_u8, sc.comp_u8, sc.am_u8,
+                sc.causal_bias, scaling, nsplit, cap,
+            )
 
         # One-shot debug dump of real decode tensors (env-gated) for kernel/selector
         # analysis (e.g. analysis/gist_pivot_recall.py). Inert unless DUMP_DECODE set.
@@ -1095,6 +1132,16 @@ def _prefill_forward(module, query, key, value, attention_mask, scaling, dropout
         b_flat, t_flat = valid_q_blk.nonzero(as_tuple=True)
         q_flat = q_pos_blk[b_flat, t_flat]
         out[b_flat, q_flat] = src[b_flat, t_flat]
+
+    # Offload decode otherwise rebuilds this per-layer state from pinned host K
+    # on its first token. Capture the small gist-key view now while full K is
+    # already resident on GPU during prefill.
+    kv_cache = kwargs.get("gsa_kv_cache")
+    if hasattr(kv_cache, "hot_state"):
+        module._gist_decode_cache = _build_full_cache(
+            input_ids, key, gist_ids, k_len, B, H, d, device, num_levels,
+            n_rep=module.num_key_value_groups,
+        )
 
     return out.contiguous(), None
 
