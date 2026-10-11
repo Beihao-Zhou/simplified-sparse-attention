@@ -19,3 +19,6 @@ benchmark/RAG_exp/*.jsonl
 # symlink or copy is fine).
 benchmark/Longbench_exp/LongBench
 ._*
+
+# Local working documents (proposals, drafts) — not part of the codebase
+artifacts/
