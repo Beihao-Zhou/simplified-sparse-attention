@@ -18,19 +18,6 @@ class GistActivations:
     # In case needed, e.g. for absolute position embeddings.
     gist_indices: Optional[torch.LongTensor] = None
 
-    def get_single(self, batch_idx):
-        # Return batch-size-1 version of each key.
-        return GistActivations(
-            last_hidden_state=self.last_hidden_state[batch_idx : batch_idx + 1],
-            past_key_values=tuple(
-                (k[batch_idx : batch_idx + 1], v[batch_idx : batch_idx + 1])
-                for k, v in self.past_key_values
-            ),
-            gist_indices=self.gist_indices[batch_idx : batch_idx + 1]
-            if self.gist_indices is not None
-            else None,
-        )
-
     @classmethod
     def from_model_outputs(
         cls,

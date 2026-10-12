@@ -21,17 +21,11 @@ echo "Name: $name"
 echo "Chunk Sizes: ${chunk[@]}"
 echo "Selective: $select"
 
-# script="scripts/evaluation/${data}_nolink.py"
-# python $script \
-#   --ckpt_path $ckpt_path \
-#   --name $name \
-#   $extra_arg \
-#   --chunk_size ${chunk[@]} \
-#   --meta_gist 1
-
-
+# --dataset {nq,tqa,hqa,wiki,musique} --mode {base,gist,link}; --pos is nq-only.
 for pos in 0; do
-    python benchmark/RAG_exp/nq_gist.py \
+    python benchmark/RAG_exp/rag_eval.py \
+        --dataset nq \
+        --mode gist \
         --pos $pos \
         --ckpt_path $ckpt_path \
         --name $name \

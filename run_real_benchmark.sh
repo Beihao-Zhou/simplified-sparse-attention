@@ -59,7 +59,7 @@ NAME="optimized"
 rm -rf "pred/qwen2-7b-instruct/${NAME}"
 
 echo ">>> Generating predictions with OPTIMIZED sparse attention (compact decode + flex prefill)..."
-python benchmark/Longbench_exp/longbench_pred_qwen.py \
+python benchmark/Longbench_exp/longbench_pred.py \
   --model qwen2-7b-instruct \
   --datasets "$DATASET" \
   --ckpt_path "$ckpt" \

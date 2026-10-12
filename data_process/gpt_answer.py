@@ -11,9 +11,9 @@ import random
 from typing import Any, Dict, List
 
 import pandas as pd
+import requests
 import torch
 from tqdm import tqdm
-import requests
 from transformers import AutoModel, AutoTokenizer, PreTrainedModel, PreTrainedTokenizer
 
 try:
@@ -38,10 +38,10 @@ def mean_pooling(token_embeddings: torch.Tensor, mask: torch.Tensor) -> torch.Te
     sentence_embeddings = token_embeddings.sum(dim=1) / mask.sum(dim=1)[..., None]
     return sentence_embeddings
 
-def process_tqa_instance(ins: Dict[str, Any], model:PreTrainedModel, retrieval_tokenizer:PreTrainedTokenizer):
-    documents = [{"title":i['title'], "text":i['text'], "score":0.0} for i in ins["ctxs"]]
+def rank_documents(question: str, documents: List[Dict[str, Any]], model: PreTrainedModel, retrieval_tokenizer: PreTrainedTokenizer):
+    """Score documents by embedding similarity to the question; return the top 10."""
     embeddings = compute_embeddings(
-        sentences=[ins['question']] + [i['text'] for i in documents], model=model, tokenizer=retrieval_tokenizer
+        sentences=[question] + [i['text'] for i in documents], model=model, tokenizer=retrieval_tokenizer
     )
     q_emb = embeddings[0].clone().unsqueeze(dim=0)
     scores = torch.matmul(input=q_emb, other=embeddings[1:].T).squeeze(dim=0)
@@ -51,12 +51,17 @@ def process_tqa_instance(ins: Dict[str, Any], model:PreTrainedModel, retrieval_t
     for idx, score in zip(indices, values):
         documents[idx]['score'] = score
     documents.sort(key=lambda i: i['score'], reverse=True)
+    return documents[:10]
+
+def process_tqa_instance(ins: Dict[str, Any], model:PreTrainedModel, retrieval_tokenizer:PreTrainedTokenizer):
+    documents = [{"title":i['title'], "text":i['text'], "score":0.0} for i in ins["ctxs"]]
+    documents = rank_documents(ins['question'], documents, model, retrieval_tokenizer)
 
     return {
         "question":ins['question'],
         "answers":ins['answers'],
         "generated":"",
-        "documents":documents[:10]
+        "documents":documents
     }
 
 def process_tqa(input_file: str, model:PreTrainedModel, retrieval_tokenizer:PreTrainedTokenizer):
@@ -75,23 +80,13 @@ def process_2wiki_instance(ins: Dict[str, Any], model:PreTrainedModel, retrieval
         ins['context'] = json.loads(ins['context'])
 
     documents = [{"title":i[0], "text":''.join(i[1]), "score":0.0} for i in ins["context"]]
-    embeddings = compute_embeddings(
-        sentences=[ins['question']] + [i['text'] for i in documents], model=model, tokenizer=retrieval_tokenizer
-    )
-    q_emb = embeddings[0].clone().unsqueeze(dim=0)
-    scores = torch.matmul(input=q_emb, other=embeddings[1:].T).squeeze(dim=0)
-    values, indices = torch.sort(input=scores, descending=True)
-    values, indices = values.tolist(), indices.tolist()
-
-    for idx, score in zip(indices, values):
-        documents[idx]['score'] = score
-    documents.sort(key=lambda i: i['score'], reverse=True)
+    documents = rank_documents(ins['question'], documents, model, retrieval_tokenizer)
 
     return {
         "question":ins['question'],
         "answers":[ins['answer']],
         "generated":"",
-        "documents":documents[:10]
+        "documents":documents
     }
 
 def process_2wiki(input_file: str, model:PreTrainedModel, retrieval_tokenizer:PreTrainedTokenizer):
@@ -139,7 +134,7 @@ def generate_answer(dataset: List):
         if dataset[i]["generated"] is not None and dataset[i]["generated"] != " ":
             if len(dataset[i]["generated"]) < 1000:
                 continue
-        
+
         user_msg = ""
         data = dataset[i]
         for j in range(len(data["documents"])):
@@ -154,11 +149,6 @@ def generate_answer(dataset: List):
         print(response)
 
     return dataset
-
-
-def load_jsonline(fp: str):
-    with open(fp, "r", encoding="utf-8") as f:
-        return [json.loads(i) for i in f]
 
 
 def write_jsonline(fp: str, obj: List[Any]):

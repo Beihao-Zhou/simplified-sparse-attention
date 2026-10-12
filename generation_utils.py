@@ -2,33 +2,24 @@
 """Override GenerationMixin with Gist functionality."""
 
 import inspect
-import warnings
-from typing import Any, Dict, List, Optional, Union
+import os
+from typing import Any, Dict, List, Optional
 
 import torch
-import torch.distributed as dist
+from torch import nn
+from transformers.cache_utils import Cache
+from transformers.generation.configuration_utils import GenerationConfig
 from transformers.generation.logits_process import LogitsProcessorList
-from transformers.generation.stopping_criteria import (
-    StoppingCriteriaList, validate_stopping_criteria)
-from transformers.generation.utils import (GenerationMixin,
-                                           GreedySearchDecoderOnlyOutput,
-                                           GreedySearchEncoderDecoderOutput,
-                                           GreedySearchOutput)
+from transformers.generation.stopping_criteria import StoppingCriteriaList
+from transformers.generation.streamers import BaseStreamer
+from transformers.generation.utils import (
+    GenerateDecoderOnlyOutput,
+    GenerateEncoderDecoderOutput,
+    GenerationMixin,
+)
+from transformers.masking_utils import create_masks_for_generate
 from transformers.utils import ModelOutput, logging
-from transformers.cache_utils import (
-    Cache,
-    DynamicCache,
-    EncoderDecoderCache,
-    QuantizedCache,
-    StaticCache,
-)
-from transformers.generation.configuration_utils import (
-    ALL_STATIC_CACHE_IMPLEMENTATIONS,
-    DEPRECATED_STATIC_CACHE_IMPLEMENTATIONS,
-    STATIC_CACHE_IMPLEMENTATIONS,
-    GenerationConfig,
-    GenerationMode,
-)
+
 ALL_CACHE_NAMES = [
     "past_key_values",  # default
     "cache_params",  # mamba-based models

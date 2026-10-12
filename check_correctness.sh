@@ -28,7 +28,7 @@ ckpt="${CKPT:-gist-sparse-attention/GSA-FT-Qwen2-7B-Instruct-chunk4-chunk4}"
 run() {  # $1=name  $2=ATTN_IMPL  $3=DECODE_SELECT
   rm -rf "pred/qwen2-7b-instruct/$1"
   ATTN_IMPL="$2" DECODE_SELECT="$3" PREFILL_KERNEL="${PREFILL_KERNEL:-flex}" MAX_SAMPLES="$N" \
-    python benchmark/Longbench_exp/longbench_pred_qwen.py \
+    python benchmark/Longbench_exp/longbench_pred.py \
       --model qwen2-7b-instruct --datasets "$DATASET" --ckpt_path "$ckpt" \
       --name "$1" --selective --chunk_size ${chunk[@]} --meta_gist 1 >/dev/null
 }

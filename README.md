@@ -35,6 +35,7 @@ simplified-sparse-attention/
 ├── gist_sft_trainer.py           # selective finetuning
 ├── gist_sft_trainer_link.py      # link-token SFT variant for RAG
 ├── gist_trainer_long.py          # long-context training driver
+├── gist_training.py              # setup shared by the trainers
 ├── src/
 │   ├── common.py
 │   └── data/
@@ -47,8 +48,9 @@ simplified-sparse-attention/
 │   │   ├── LongBench/            # bundled datasets.load_from_disk task folders
 │   │   └── longbench_config/     # prompts, max lengths, model paths
 │   ├── RAG_exp/                  # multi-document RAG evaluation
+│   │   ├── rag_eval.py           # --dataset {nq,tqa,hqa,wiki,musique} --mode {base,gist,link}
 │   │   └── nq-open-10_0.jsonl    # bundled NQ-open RAG data
-│   └── Passkey_exp/              # passkey retrieval evaluation
+│   └── Passkey_exp/              # passkey retrieval evaluation (Llama or Qwen2, from the checkpoint)
 ├── data_process/                 # optional data preparation utilities
 ├── run_real_benchmark.sh         # optimized LongBench latency + accuracy run
 ├── run_longbench.sh              # quick LongBench run
@@ -76,7 +78,7 @@ step.
 LongBench data is bundled under `benchmark/Longbench_exp/LongBench/<task>/`
 in `datasets.load_from_disk` format.
 
-The NQ-open RAG data used by `benchmark/RAG_exp/nq_*.py` is bundled at
+The NQ-open RAG data used by `benchmark/RAG_exp/rag_eval.py --dataset nq` is bundled at
 `benchmark/RAG_exp/nq-open-10_0.jsonl`.
 
 ## Usage
@@ -91,7 +93,7 @@ Or call the prediction script directly:
 
 ```bash
 DECODE_SELECT=group PREFILL_KERNEL=flex \
-  python benchmark/Longbench_exp/longbench_pred_qwen.py \
+  python benchmark/Longbench_exp/longbench_pred.py \
     --model qwen2-7b-instruct \
     --datasets triviaqa \
     --ckpt_path <GSA-FT-Qwen2-7B-Instruct-chunk4-chunk4> \
@@ -115,8 +117,11 @@ Training starts with continued pretraining, then selective finetuning:
 
 ```bash
 python gist_cpt_trainer.py
-python gist_sft_trainer.py
+python gist_sft_trainer.py --start_model <GSA-PT checkpoint> --output_name <name>
 ```
+
+`longbench_pred.py` and `passkey_pred.py` pick the Llama or Qwen2 gist model from the
+checkpoint's `config.model_type`.
 
 ## Validated Results
 

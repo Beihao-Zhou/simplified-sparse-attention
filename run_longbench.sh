@@ -32,7 +32,7 @@ echo "ATTN_IMPL: $ATTN_IMPL  MAX_SAMPLES: $MAX_SAMPLES"
 
 rm -rf "${REPO_ROOT}/pred"
 
-python benchmark/Longbench_exp/longbench_pred_qwen.py \
+python benchmark/Longbench_exp/longbench_pred.py \
   --model qwen2-7b-instruct \
   --datasets $dataset \
   --ckpt_path ${ckpt_path} \
