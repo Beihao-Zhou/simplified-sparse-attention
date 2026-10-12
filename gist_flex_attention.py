@@ -8,6 +8,8 @@ can be skipped; RoPE is already applied, so positions are unaffected.
 Importing this module registers GIST_FLEX. Non-selective training only.
 """
 
+import functools
+import json
 import os
 from typing import Optional
 
@@ -23,18 +25,27 @@ from src.data.gist_flex_mask import (
 
 GIST_FLEX = "gist_flex"
 
-_flex_fn = None
+_compiled_flex = None
 
 
-def _flex():
-    """flex_attention, compiled on CUDA."""
-    global _flex_fn
-    if _flex_fn is None:
-        use_compile = torch.cuda.is_available() and os.environ.get("GIST_FLEX_COMPILE", "1") == "1"
+def _flex(device: torch.device):
+    """flex_attention, compiled for CUDA tensors and eager otherwise (e.g. CPU tests)."""
+    global _compiled_flex
+    if device.type != "cuda" or os.environ.get("GIST_FLEX_COMPILE", "1") != "1":
+        return flex_attention
+    if _compiled_flex is None:
         # Not dynamic=False: that recompiles per length and, past the recompile limit,
         # falls back to eager, which materializes [B, H, T, T] scores.
-        _flex_fn = torch.compile(flex_attention) if use_compile else flex_attention
-    return _flex_fn
+        _compiled_flex = torch.compile(flex_attention)
+    return _compiled_flex
+
+
+@functools.lru_cache(maxsize=None)
+def _kernel_options() -> Optional[dict]:
+    """GIST_FLEX_KERNEL_OPTIONS (JSON) overrides the Triton tile sizes, whose defaults
+    can exceed shared memory on GPUs smaller than H100 (e.g. L4)."""
+    opts = os.environ.get("GIST_FLEX_KERNEL_OPTIONS")
+    return json.loads(opts) if opts else None
 
 
 def prepare_gist_flex(
@@ -93,11 +104,12 @@ def gist_flex_attention_forward(
     key = key.gather(2, idx)
     value = value.gather(2, idx)
 
-    out = _flex()(
+    out = _flex(query.device)(
         query, key, value,
         block_mask=gist_block_mask,
         scale=scaling,
         enable_gqa=query.shape[1] != H_kv,
+        kernel_options=_kernel_options(),
     )
     return out.transpose(1, 2).contiguous(), None
 
