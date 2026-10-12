@@ -6,6 +6,7 @@ from transformers import PreTrainedTokenizerBase
 
 import src.data.gist as gist
 from gist_utils import Global_data
+from src.data.gist_stream import insert_gists_with_map, stream_labels
 
 summary_prompts = [
     "You are an AI assistant. Read the provided text and produce a concise summary. Capture the main points without unnecessary detail.",
@@ -39,6 +40,7 @@ class gist_attention_preprocessor():
         query_first: bool = False,
         use_semantic_chunking: bool = False,
         chunk_size_flexibility: float = 0.5,
+        stream_gists: bool = False,
     ) -> None:
         self.tokenizer = tokenizer
         self.max_len = max_len
@@ -51,6 +53,8 @@ class gist_attention_preprocessor():
         self.interleaved = interleaved
         self.query_first = query_first
         self.use_semantic_chunking = use_semantic_chunking  # Not used
+        # Gist question and answer too, as decode-time insertion does (gist_stream.py).
+        self.stream_gists = stream_gists
         self.chunk_size_flexibility = chunk_size_flexibility
 
     def _interleave_link_tokens(self, doc_tokens: list[int], link_tokens: list[int]) -> list[int]:
@@ -157,14 +161,44 @@ class gist_attention_preprocessor():
         return self._assemble(segments)
 
     def gist_process_qa(self, example):
+        if self.stream_gists:
+            return self._gist_process_qa_stream(example)
+
         sink = {"system": Global_data.sink_size - 1, "doc": 0}
         return self._assemble([
             (kind, self._insert_gists(ids, sink[kind]) if kind in sink else ids)
             for kind, ids in self._qa_segments(example)
         ])
 
+    def _gist_process_qa_stream(self, example):
+        """Like gist_process_qa, but the whole sequence is gisted as one stream
+        (gist_stream.py); loss stays on the answer's raw tokens and EOS."""
+        raw, raw_loss = [], []
+        for kind, ids in self._qa_segments(example):
+            raw.extend(ids)
+            raw_loss.extend([kind == "answer"] * len(ids))
+
+        meta = self.meta_gist != 0
+        gist_ids = self.gist_token_ids if meta else self.gist_token_ids[:1]
+        group = self.chunk_size[1:] if meta else 1  # J per level; last repeats
+        tokens, src = insert_gists_with_map(
+            raw, gist_ids, self.chunk_size[0], group, sink=Global_data.sink_size - 1)
+        loss_mask = [s >= 0 and raw_loss[s] for s in src]
+
+        output_sequence = [self.tokenizer.bos_token_id] + tokens
+        labels = [-100] + stream_labels(tokens, gist_ids, loss_mask)
+        return {
+            "input_ids": output_sequence,
+            "labels": labels,
+            "attention_mask": [1 for _ in output_sequence],
+        }
+
     def process_qa(self, example):
         return self._assemble(self._qa_segments(example))
+
+# Flex batches are padded to a multiple of the block size: aligned blocks, fewer shapes.
+FLEX_LENGTH_MULTIPLE = 128
+
 
 def _left_pad(batch):
     """input_ids / labels / attention_mask of a batch as left-padded tensors."""
@@ -181,7 +215,17 @@ def _left_pad(batch):
 
 def _attach_gist_mask(model_inputs, mask_fn, **mask_kwargs):
     """Add attention_mask_gist to a left-padded batch."""
-    model_inputs["attention_mask_gist"] = mask_fn(
+    if Global_data.train_attn == "flex":
+        # The model builds the mask from input_ids.
+        extra = -model_inputs["input_ids"].shape[1] % FLEX_LENGTH_MULTIPLE
+        if extra:
+            for key, value in model_inputs.items():
+                fill = -100 if key == "labels" else Global_data.pad_token_id
+                model_inputs[key] = torch.nn.functional.pad(value, (extra, 0), value=fill)
+        model_inputs["attention_mask_gist"] = None
+        return dict(model_inputs)
+
+    mask = mask_fn(
         inputs=model_inputs["input_ids"],
         gist_token=Global_data.gist_token_id,
         chunk_size=Global_data.chunk_size[0],
@@ -191,6 +235,9 @@ def _attach_gist_mask(model_inputs, mask_fn, **mask_kwargs):
         add_raw=Global_data.add_raw,
         **mask_kwargs,
     )
+    model_inputs["attention_mask_gist"] = gist.add_raw_window(
+        mask, model_inputs["input_ids"], Global_data.gist_token_id,
+        Global_data.raw_window, Global_data.pad_token_id)
     return dict(model_inputs)
 
 

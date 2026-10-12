@@ -26,6 +26,11 @@ class Global_data:
     top_k = [3,3,3]
     top_p = -1.0
     num_previous_chunks = 1
+    # "dense": [B,1,T,T] masks (~20K max); "flex": gist_flex_attention.py (128K+).
+    train_attn = "dense"
+    # Recent raw tokens kept exactly visible (R6 in src/data/gist_flex_mask.py); 0 = off.
+    # Training only so far: inference ignores it.
+    raw_window = 0
     inference_mode = "default"
     sparse_budget = 64  # Per-query budget for sparse attention (max keys to attend to)
     last_pos = None

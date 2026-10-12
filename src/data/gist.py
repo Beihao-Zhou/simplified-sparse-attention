@@ -1063,6 +1063,26 @@ def make_hierarchical_gist_mask_greedy(
     return final_mask.type(dtype)
 
 
+def add_raw_window(
+    mask: torch.Tensor,
+    inputs: torch.Tensor,
+    gist_token: list,
+    raw_window: int,
+    pad_token: Optional[int] = None,
+) -> torch.Tensor:
+    """Dense counterpart of R6 in src/data/gist_flex_mask.py, on a bool [B, 1, T, T] mask."""
+    if raw_window <= 0:
+        return mask
+    T = inputs.shape[1]
+    band = torch.ones(T, T, dtype=torch.bool, device=inputs.device).tril()
+    band &= ~band.tril(-raw_window)  # 0 <= q - k < raw_window
+    is_raw = ~torch.isin(inputs, torch.tensor(list(gist_token), device=inputs.device))
+    if pad_token is not None:
+        is_raw = is_raw & (inputs != pad_token)
+    win = band[None] & is_raw[:, :, None] & is_raw[:, None, :]
+    return mask | win[:, None]
+
+
 def make_hierarchical_gist_mask(
     inputs: torch.Tensor,
     gist_token: list,

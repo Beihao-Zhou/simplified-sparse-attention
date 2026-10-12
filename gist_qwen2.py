@@ -1261,27 +1261,52 @@ class GistQwen2Model(Qwen2PreTrainedModel):
         if past_key_values is not None:
             past_key_values_length = past_key_values.get_seq_length()
 
-        causal_mask = self._prepare_decoder_attention_mask(
-            attention_mask,
-            (batch_size, seq_length),
-            inputs_embeds,
-            past_key_values_length,
-        )
+        if Global_data.train_attn == "flex":
+            # gist_flex_attention.py: O(T) mask features instead of the [B,1,T,T] masks below.
+            if selective or seq_length == 1 or past_key_values_length > 0:
+                raise NotImplementedError(
+                    "train_attn='flex' supports full-sequence, non-selective forward "
+                    "passes (continued pretraining) only")
+            from gist_flex_attention import GIST_FLEX, prepare_gist_flex
+            if self.config._attn_implementation != GIST_FLEX:
+                # Without it, dropping the masks below silently means plain causal attention.
+                raise ValueError(
+                    f"train_attn='flex' needs attn_implementation={GIST_FLEX!r}, "
+                    f"got {self.config._attn_implementation!r}")
+            kwargs.update(prepare_gist_flex(
+                input_ids,
+                Global_data.gist_token_id,
+                Global_data.chunk_size[0],
+                Global_data.sink_size,
+                Global_data.num_previous_chunks,
+                Global_data.pad_token_id,
+                raw_window=Global_data.raw_window,
+            ))
+            _attention_mask = None
+            kwargs["causal_mask"] = None
+            kwargs["attention_mask_gist"] = None
+        else:
+            causal_mask = self._prepare_decoder_attention_mask(
+                attention_mask,
+                (batch_size, seq_length),
+                inputs_embeds,
+                past_key_values_length,
+            )
 
-        attention_mask_gist_float = torch.full(
-            attention_mask_gist.shape,  # Use the 4D shape [8, 1, 172, 172]
-            torch.finfo(self.dtype).min,
-            dtype=self.dtype,
-            device=attention_mask_gist.device
-        )
-        attention_mask_gist_float = attention_mask_gist_float.masked_fill(
-            attention_mask_gist.bool(), 0.0
-        )
+            attention_mask_gist_float = torch.full(
+                attention_mask_gist.shape,  # Use the 4D shape [8, 1, 172, 172]
+                torch.finfo(self.dtype).min,
+                dtype=self.dtype,
+                device=attention_mask_gist.device
+            )
+            attention_mask_gist_float = attention_mask_gist_float.masked_fill(
+                attention_mask_gist.bool(), 0.0
+            )
 
-        _attention_mask = causal_mask + attention_mask_gist_float
+            _attention_mask = causal_mask + attention_mask_gist_float
 
-        kwargs["causal_mask"] = causal_mask
-        kwargs["attention_mask_gist"] = attention_mask_gist
+            kwargs["causal_mask"] = causal_mask
+            kwargs["attention_mask_gist"] = attention_mask_gist
 
         hidden_states = inputs_embeds
 
@@ -1423,7 +1448,11 @@ class GistQwen2ForCausalLM(Qwen2PreTrainedModel, GistGenerationMixin):
         self.tmp_ids = input_ids if input_ids.shape[1] > 1 else torch.cat([self.tmp_ids, input_ids], dim=1)
         kwargs['tmp_ids'] = self.tmp_ids
 
-        if len(kwargs['attention_mask_gist'].shape) == 4:
+        # Flex passes no dense mask; it takes the 4D (single-mask) branch.
+        _mask_gist = kwargs.get('attention_mask_gist')
+        _mask_ndim = 4 if _mask_gist is None else _mask_gist.dim()
+
+        if _mask_ndim == 4:
 
             if self.training is False and self.selective:
                 if not selective_inference:
@@ -1503,7 +1532,7 @@ class GistQwen2ForCausalLM(Qwen2PreTrainedModel, GistGenerationMixin):
                 if labels is not None:
                     loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.vocab_size, **kwargs)
 
-        elif len(kwargs['attention_mask_gist'].shape) == 5:
+        elif _mask_ndim == 5:
             
             K = kwargs["attention_mask_gist"].shape[0]
             B, T = input_ids.shape
