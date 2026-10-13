@@ -174,11 +174,16 @@ def make_gist_block_mask(
 ):
     """BlockMask shared by all heads. Use compile_mask=True on GPU: otherwise the
     mask is evaluated on the full T x T grid."""
+    import torch._inductor.config as inductor_config
     from torch.nn.attention.flex_attention import create_block_mask
 
     B = f.is_gist.shape[1]
-    return create_block_mask(
-        make_gist_mask_mod(f, kv_perm=kv_perm), B, None, seq_len, seq_len,
-        device=device or str(f.is_gist.device), BLOCK_SIZE=block_size,
-        _compile=compile_mask,
-    )
+    # The mask_mod exceeds inductor's realize thresholds, so it would write the [T, T]
+    # mask to memory (16 GB at 128K) instead of fusing it into the block reduction.
+    with inductor_config.patch(realize_opcount_threshold=10_000, realize_reads_threshold=10_000,
+                               realize_acc_reads_threshold=10_000):
+        return create_block_mask(
+            make_gist_mask_mod(f, kv_perm=kv_perm), B, None, seq_len, seq_len,
+            device=device or str(f.is_gist.device), BLOCK_SIZE=block_size,
+            _compile=compile_mask,
+        )
