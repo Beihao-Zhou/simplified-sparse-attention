@@ -154,6 +154,9 @@ def training_arguments(args, run_name: str, global_batch_size: int, **kwargs):
         bf16=True,
         do_eval=True,
         gradient_checkpointing=True,
+        # Non-reentrant: the reentrant default reruns the forward under no_grad, which
+        # compiles flex_attention a second time (grad_mode guard).
+        gradient_checkpointing_kwargs={"use_reentrant": False},
         remove_unused_columns=False,
         eval_on_start=False,
         seed=42,

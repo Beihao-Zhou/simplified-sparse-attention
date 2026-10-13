@@ -295,7 +295,7 @@ def e2e(dev, small, model_name, max_len):
 
         # Flex only: a few optimizer steps at long length, gradient checkpointing on.
         m = models[gist_flex_attention.GIST_FLEX]
-        m.gradient_checkpointing_enable()
+        m.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
         m.config.use_cache = False
         opt = torch.optim.AdamW(m.parameters(), lr=1e-5)
         Global_data.train_attn = "flex"
