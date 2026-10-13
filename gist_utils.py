@@ -31,6 +31,9 @@ class Global_data:
     # Recent raw tokens kept exactly visible (R6 in src/data/gist_flex_mask.py); 0 = off.
     # Training only so far: inference ignores it.
     raw_window = 0
+    # Non-selective training computes the LM loss in chunks of this many tokens instead of
+    # materializing [B, T, vocab] fp32 logits; 0 = off.
+    loss_chunk_size = 0
     inference_mode = "default"
     sparse_budget = 64  # Per-query budget for sparse attention (max keys to attend to)
     last_pos = None

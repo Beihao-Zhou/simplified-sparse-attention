@@ -5,6 +5,7 @@ import math
 from typing import List, Optional, Tuple, Union, Callable
 import copy
 import torch
+import torch.utils.checkpoint
 from torch import nn
 from transformers.modeling_outputs import (
     BaseModelOutputWithPast,
@@ -1353,6 +1354,32 @@ class GistQwen2Model(Qwen2PreTrainedModel):
             hidden_states=all_hidden_states,
         )
 
+def chunked_causal_lm_loss(hidden_states, lm_head, labels, chunk_size, num_items_in_batch=None):
+    """ForCausalLMLoss computed chunk by chunk along the sequence.
+
+    The full fp32 logits are [B, T, vocab] (about 78 GB for Qwen2 at 128K); here each chunk's
+    logits are built, reduced and freed, and recomputed in backward (checkpoint). The
+    reduction matches HF: sum / num_items_in_batch if given, else the mean over labels.
+    """
+    shift_labels = F.pad(labels, (0, 1), value=-100)[:, 1:]
+
+    def chunk_loss(h, y):
+        logits = lm_head(h).float()
+        return F.cross_entropy(logits.flatten(0, 1), y.flatten(), ignore_index=-100, reduction="sum")
+
+    total = sum(
+        torch.utils.checkpoint.checkpoint(
+            chunk_loss, hidden_states[:, i:i + chunk_size], shift_labels[:, i:i + chunk_size],
+            use_reentrant=False)
+        for i in range(0, hidden_states.shape[1], chunk_size)
+    )
+    if num_items_in_batch is None:
+        return total / (shift_labels != -100).sum()
+    if torch.is_tensor(num_items_in_batch):
+        num_items_in_batch = num_items_in_batch.to(total.device)
+    return total / num_items_in_batch
+
+
 def masked_kl_vocab(teacher_logits, student_logits, mask, temperature=1.0):
     """
     KL( teacher || student ) averaged over token positions where mask==1.
@@ -1524,13 +1551,19 @@ class GistQwen2ForCausalLM(Qwen2PreTrainedModel, GistGenerationMixin):
                 )
 
                 hidden_states = outputs.last_hidden_state
-                # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
-                slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
-                logits = self.lm_head(hidden_states[:, slice_indices, :])
+                if self.training and labels is not None and Global_data.loss_chunk_size > 0:
+                    loss = chunked_causal_lm_loss(hidden_states, self.lm_head, labels,
+                                                  Global_data.loss_chunk_size,
+                                                  kwargs.get("num_items_in_batch"))
+                    logits = None  # [B, T, vocab]; too large to keep for long sequences
+                else:
+                    # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
+                    slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
+                    logits = self.lm_head(hidden_states[:, slice_indices, :])
 
-                loss = None
-                if labels is not None:
-                    loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.vocab_size, **kwargs)
+                    loss = None
+                    if labels is not None:
+                        loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.vocab_size, **kwargs)
 
         elif _mask_ndim == 5:
             

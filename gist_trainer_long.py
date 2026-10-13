@@ -80,10 +80,18 @@ def main():
              "flex: FlexAttention with O(T) masks (gist_flex_attention.py), for long "
              "sequences; non-selective training only.",
     )
+    parser.add_argument(
+        "--loss_chunk_size",
+        type=int,
+        default=0,
+        help="Compute the LM loss in chunks of this many tokens (e.g. 4096) instead of "
+             "materializing the full fp32 logits; needed for long sequences. 0 = off.",
+    )
     args = parser.parse_args()
 
     Global_data.train_attn = args.train_attn
     Global_data.raw_window = args.raw_window
+    Global_data.loss_chunk_size = args.loss_chunk_size
     if args.train_attn == "flex":
         if args.selective:
             raise ValueError("--train_attn flex does not support --selective yet")

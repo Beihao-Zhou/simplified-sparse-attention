@@ -16,7 +16,8 @@ Sections:
   attn       one attention layer (7B shapes), fwd+bwd time and peak memory,
              gist flex vs causal SDPA (FlashAttention)
   e2e        Qwen2.5-0.5B (Qwen2 architecture, same tokenizer as 7B): dense vs flex
-             loss and gradients at 4K, then flex-only AdamW steps at 16K/32K
+             loss and gradients at 4K, then flex-only AdamW steps at 16K/32K with the
+             chunked LM loss
 
 Results are printed and written to --out as JSON.
 """
@@ -298,6 +299,7 @@ def e2e(dev, small, model_name, max_len):
         m.config.use_cache = False
         opt = torch.optim.AdamW(m.parameters(), lr=1e-5)
         Global_data.train_attn = "flex"
+        Global_data.loss_chunk_size = 256 if small else 4096  # full fp32 logits OOM at 16K
         for T in ([1024] if small else [n for n in (16384, 32768) if n <= max_len]):
             seq = gisted_ids(T, levels, groups, rng, vocab=vocab, gist=gist_ids_all)
             ids = torch.tensor([seq], device=dev)
@@ -323,6 +325,7 @@ def e2e(dev, small, model_name, max_len):
                 break
         m = opt = None
         models.clear()
+        Global_data.loss_chunk_size = 0
         peak_reset(dev)
 
 
