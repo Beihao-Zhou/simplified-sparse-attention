@@ -94,8 +94,9 @@ def make_gist_mask_mod(f: GistMaskFeatures, kv_perm: Optional[torch.Tensor] = No
     Rules (q = query index, k = key index):
       R1  summary tokens: the top level is visible to every query; level l < top only
           within the query's section of level l (no higher gist in between).
-      R2  local window: keys in the same level-0 chunk or the previous P chunks, for
-          queries that are not summary tokens of level >= 1.
+      R2  local window: raw and level-0 keys in the same level-0 chunk or the previous P
+          chunks, for queries that are not summary tokens of level >= 1. (Higher gists
+          are left to R1; see make_hierarchical_gist_mask_greedy.)
       R3  a level-l gist sees the level-(l-1) gists of its own level-l chunk.
       R4  if P > 0, queries below level l+1 also see level-(l-1) gists in the previous
           P level-l chunks (this window may cross section boundaries, as in the
@@ -125,7 +126,7 @@ def make_gist_mask_mod(f: GistMaskFeatures, kv_perm: Optional[torch.Tensor] = No
 
         # R2
         d0 = chunk[0][b, q_idx] - chunk[0][b, kv_idx]
-        vis = vis | (((d0 == 0) | ((d0 > 0) & (d0 <= P))) & ~any_ge[1][b, q_idx])
+        vis = vis | (((d0 == 0) | ((d0 > 0) & (d0 <= P))) & ~any_ge[1][b, q_idx] & ~any_ge[1][b, kv_idx])
 
         # R3 / R4
         for lvl in range(1, L):

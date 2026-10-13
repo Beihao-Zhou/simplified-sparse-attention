@@ -1006,7 +1006,10 @@ def make_hierarchical_gist_mask_greedy(
     chunk_diff = chunk_ids[:, :, None] - chunk_ids[:, None, :]
     within_n_chunks = (chunk_diff > 0) & (chunk_diff <= num_previous_chunks)
     is_higher_level_gist = torch.isin(inputs, gist_token_tensor[1:])
-    final_mask = final_mask | ((same_chunk | within_n_chunks) & (~is_higher_level_gist)[:, :, None])
+    # Raw and level-0 keys only: a higher gist right after a level-0 gist falls in the next
+    # chunk, and with 3+ levels it would stay visible after the gist above it closed it.
+    is_level0 = ~is_higher_level_gist
+    final_mask = final_mask | ((same_chunk | within_n_chunks) & is_level0[:, :, None] & is_level0[:, None, :])
 
     # Level i: level-i gists attend to the level-(i-1) gists of their chunk
     for level in range(1, num_levels):
