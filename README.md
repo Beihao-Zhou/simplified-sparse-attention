@@ -45,13 +45,13 @@ simplified-sparse-attention/
 │   └── sparse_decode_attn.cu     # CUDA sparse decode kernel
 ├── benchmark/
 │   ├── Longbench_exp/            # LongBench prediction, evaluation, and included data
-│   │   ├── LongBench/            # bundled datasets.load_from_disk task folders
+│   │   ├── LongBench/            # task folders built by data_process/build_longbench.py (gitignored)
 │   │   └── longbench_config/     # prompts, max lengths, model paths
 │   ├── RAG_exp/                  # multi-document RAG evaluation
 │   │   ├── rag_eval.py           # --dataset {nq,tqa,hqa,wiki,musique} --mode {base,gist,link}
 │   │   └── nq-open-10_0.jsonl    # bundled NQ-open RAG data
 │   └── Passkey_exp/              # passkey retrieval evaluation (Llama or Qwen2, from the checkpoint)
-├── data_process/                 # optional data preparation utilities
+├── data_process/                 # LongBench build, CPT-to-streaming conversion, other data prep
 ├── run_real_benchmark.sh         # optimized LongBench latency + accuracy run
 ├── run_longbench.sh              # quick LongBench run
 ├── run_rag.sh                    # RAG evaluation entrypoint
@@ -67,16 +67,22 @@ simplified-sparse-attention/
 ```bash
 pip install -r requirements.txt
 export TORCH_CUDA_ARCH_LIST=9.0  # H100; set this to your GPU architecture
+export PYTHONPATH=$(pwd)          # the benchmark scripts import repo modules
 ```
 
 The CUDA decode kernel in `kernels/sparse_decode_attn.cu` is JIT-compiled on
 first use through `torch.utils.cpp_extension.load`; there is no separate build
 step.
 
-## Included Data
+## Data
 
-LongBench data is bundled under `benchmark/Longbench_exp/LongBench/<task>/`
-in `datasets.load_from_disk` format.
+LongBench is not bundled. Build the `datasets.load_from_disk` folders the prediction
+script reads (`benchmark/Longbench_exp/LongBench/<task>/`) from THUDM/LongBench:
+
+```bash
+python data_process/build_longbench.py                      # all tasks
+python data_process/build_longbench.py --tasks triviaqa hotpotqa
+```
 
 The NQ-open RAG data used by `benchmark/RAG_exp/rag_eval.py --dataset nq` is bundled at
 `benchmark/RAG_exp/nq-open-10_0.jsonl`.
@@ -109,7 +115,7 @@ Useful inference knobs:
 |---|---:|---|
 | `ATTN_IMPL` | `sparse` | `sparse` runs the CUDA sparse path; `ref` forces the eager reference (debug). |
 | `PREFILL_KERNEL` | `dense` | `flex` enables block-sparse permuted prefill; `dense` uses the compile-compatible path. |
-| `DECODE_SELECT` | `head` | `head` = per-head top-k then union within the GQA group (the paper's grouped unfolding; allclose to the eager reference). `group` = sum the group heads' scores, one top-k per group (a different, cheaper selection; F1-validated, not allclose). Same tpot uncompiled; pair `group` with `DECODE_COMPILE` for a lower tpot floor. |
+| `DECODE_SELECT` | `head` | `head` = per-head top-k then union within the GQA group (the paper's grouped unfolding; selects like the eager reference up to near-tie flips, since gist scores are bf16 and the kernel output is allclose, not bitwise). `group` = sum the group heads' scores, one top-k per group (a different, cheaper selection; F1-validated, not allclose). Same tpot uncompiled; pair `group` with `DECODE_COMPILE` for a lower tpot floor. |
 | `DECODE_COMPILE` | `0` | Enables torch.compile for lower decode launch overhead. |
 | `DECODE_GMAX_BUCKET` | `0` | Buckets decode shapes to improve graph reuse when compilation is enabled. |
 
@@ -122,6 +128,12 @@ python gist_sft_trainer.py --start_model <GSA-PT checkpoint> --output_name <name
 
 `longbench_pred.py` and `passkey_pred.py` pick the Llama or Qwen2 gist model from the
 checkpoint's `config.model_type`.
+
+Long-context training (`gist_trainer_long.py --train_attn flex --loss_chunk_size 4096`)
+computes the gist mask with FlexAttention instead of a dense [T, T] mask. Its backward
+for head_dim 128 needs torch >= 2.8 on GPUs other than H100; on GPUs with less shared
+memory (e.g. L4) also set
+`GIST_FLEX_KERNEL_OPTIONS='{"BLOCK_M":64,"BLOCK_N":64,"num_warps":4,"num_stages":1}'`.
 
 ## Validated Results
 
