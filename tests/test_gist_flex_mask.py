@@ -117,7 +117,7 @@ def test_raw_window_keeps_recent_raw_exact_and_gists_unchanged():
     win = build_gist_mask_features(inputs, GIST_IDS[:2], 4, 0, 1, raw_window=W)
     m0 = create_mask(make_gist_mask_mod(base), 1, None, T, T, device="cpu")[0, 0]
     m1 = create_mask(make_gist_mask_mod(win), 1, None, T, T, device="cpu")[0, 0]
-    is_raw = ~base.any_ge[0][0]
+    is_raw = base.level[0] < 0
     pos = torch.arange(T)
     near = (pos[:, None] - pos[None, :] >= 0) & (pos[:, None] - pos[None, :] < W)
     assert m1[near & is_raw[:, None] & is_raw[None, :]].all()

@@ -1,8 +1,13 @@
 """Gist causal mask as a FlexAttention `mask_mod`.
 
-Every rule of `make_hierarchical_gist_mask_greedy` depends only on per-token level,
-chunk and section ids, so the mask needs O(T) features instead of [B, 1, T, T].
-It implements greedy mask AND causal, which is what the model applies.
+Every rule of `make_hierarchical_gist_mask_greedy` can be decided from a few
+per-token positions, so the mask needs O(T) features instead of [B, 1, T, T]. It
+implements greedy mask AND causal, which is what the model applies.
+
+Each rule is one comparison per (q, k), independent of the number of gist levels: a
+gist stays visible from its position until the first gist of a higher level closes it
+(`close`), and is read by its parent (`par`). Comparing chunk and section ids level by
+level instead would cost O(levels) per element.
 
 Not supported: `link_tokens` (multi-document RAG) and `add_raw` (unused KL path).
 """
@@ -15,23 +20,38 @@ import torch
 
 @dataclass
 class GistMaskFeatures:
-    """Per-token features from which the gist causal mask is computed."""
+    """Per-token positions from which the gist causal mask is computed ([B, T] int32).
+    close / par / par_p describe a gist as a key; start describes a token as a query."""
 
-    is_gist: torch.Tensor   # [L, B, T] bool: token is a level-l summary token
-    chunk: torch.Tensor     # [L, B, T] long: level-l chunk id (a gist belongs to its own chunk)
-    section: torch.Tensor   # [L, B, T] long: number of gists above level l up to and including t
-    any_ge: torch.Tensor    # [L+1, B, T] bool: token is a summary token of level >= l
-    sink_end: torch.Tensor  # [B] long: keys with index < sink_end are visible to every query
+    level: torch.Tensor     # -1 for raw tokens, l for a level-l summary token
+    close: torch.Tensor     # where the gist's lifetime ends: the next higher-level gist, else T
+    par: torch.Tensor       # the next gist one level up (its parent), else T
+    par_p: torch.Tensor     # the (P+1)-th gist one level up, else T (R4, P > 0)
+    start: torch.Tensor     # first position of the query's level-0 chunk, P chunks back
+    sink_end: torch.Tensor  # [B]: keys before it are visible to every query
     has_gist: torch.Tensor  # [B] bool: example contains at least one summary token
     is_pad: torch.Tensor    # [B, T] bool
+    num_levels: int
     num_previous_chunks: int
     raw_window: int = 0
 
 
-def _chunk_ids(is_level: torch.Tensor) -> torch.Tensor:
-    """Chunk id per token; a gist closes its chunk, so it belongs to it."""
-    c = is_level.long().cumsum(-1)
-    return torch.where(is_level, c - 1, c)
+def _occurrence_table(is_x: torch.Tensor) -> torch.Tensor:
+    """occ[b, m] = position of the m-th (0-based) True in is_x[b], else T; width T + 1."""
+    B, T = is_x.shape
+    cnt = is_x.long().cumsum(-1)
+    occ = torch.full((B, T + 1), T, dtype=torch.long, device=is_x.device)
+    pos = torch.arange(T, device=is_x.device).expand(B, T)
+    occ.scatter_(1, torch.where(is_x, cnt - 1, T), pos)
+    occ[:, T] = T
+    return occ
+
+
+def _nth_after(is_x: torch.Tensor, n: int = 1) -> torch.Tensor:
+    """Position of the n-th True strictly after each position, else T."""
+    T = is_x.shape[1]
+    index = (is_x.long().cumsum(-1) + n - 1).clamp_max(T)
+    return _occurrence_table(is_x).gather(1, index)
 
 
 def build_gist_mask_features(
@@ -46,41 +66,41 @@ def build_gist_mask_features(
     """Arguments mirror `make_hierarchical_gist_mask_greedy`, plus `raw_window` (R6)."""
     B, T = inputs.shape
     device = inputs.device
-    L = len(gist_token)
+    L, P = len(gist_token), num_previous_chunks
 
-    is_gist = torch.stack([inputs == g for g in gist_token])          # [L, B, T]
-    chunk = torch.stack([_chunk_ids(is_gist[lvl]) for lvl in range(L)])   # [L, B, T]
+    level = torch.full((B, T), -1, dtype=torch.long, device=device)
+    for lvl, g in enumerate(gist_token):
+        level[inputs == g] = lvl
 
-    # any_ge[l] = summary token of level >= l; any_ge[L] is all False.
-    any_ge = torch.zeros(L + 1, B, T, dtype=torch.bool, device=device)
-    for lvl in range(L - 1, -1, -1):
-        any_ge[lvl] = any_ge[lvl + 1] | is_gist[lvl]
+    close = torch.full_like(level, T)
+    par = torch.full_like(level, T)
+    par_p = torch.full_like(level, T)
+    for lvl in range(L - 1):  # the top level is never closed and has no parent
+        here = level == lvl
+        close = torch.where(here, _nth_after(level > lvl), close)
+        par = torch.where(here, _nth_after(level == lvl + 1), par)
+        if P > 0:
+            par_p = torch.where(here, _nth_after(level == lvl + 1, P + 1), par_p)
 
-    # Sections at level l are delimited by any summary token above level l.
-    section = torch.stack([any_ge[lvl + 1].long().cumsum(-1) for lvl in range(L)])
+    # start[q]: just after the n-th level-0 gist, n = (level-0 gists before q) - P.
+    is_g0 = level == 0
+    n = is_g0.long().cumsum(-1) - is_g0.long() - P
+    g0_pos = _occurrence_table(is_g0)
+    start = torch.where(n > 0, g0_pos.gather(1, (n - 1).clamp(0, T)) + 1, 0)
 
     positions = torch.arange(T, device=device)
     if attention_sink_size < 0:
         # Dynamic sink: everything before (first level-0 gist - chunk_size).
-        first = torch.where(is_gist[0], positions[None, :], torch.full_like(positions[None, :], T))
+        first = torch.where(is_g0, positions[None, :], torch.full_like(positions[None, :], T))
         sink_end = first.min(dim=1).values - chunk_size
-    elif attention_sink_size > 0:
-        sink_end = torch.full((B,), attention_sink_size, dtype=torch.long, device=device)
     else:
-        sink_end = torch.zeros(B, dtype=torch.long, device=device)
+        sink_end = torch.full((B,), max(attention_sink_size, 0), dtype=torch.long, device=device)
 
     is_pad = (inputs == pad_token) if pad_token is not None else torch.zeros_like(inputs, dtype=torch.bool)
-
     return GistMaskFeatures(
-        is_gist=is_gist,
-        chunk=chunk,
-        section=section,
-        any_ge=any_ge,
-        sink_end=sink_end,
-        has_gist=any_ge[0].any(-1),
-        is_pad=is_pad,
-        num_previous_chunks=num_previous_chunks,
-        raw_window=raw_window,
+        level=level.int(), close=close.int(), par=par.int(), par_p=par_p.int(), start=start.int(),
+        sink_end=sink_end.int(), has_gist=(level >= 0).any(-1), is_pad=is_pad,
+        num_levels=L, num_previous_chunks=P, raw_window=raw_window,
     )
 
 
@@ -88,64 +108,52 @@ def make_gist_mask_mod(f: GistMaskFeatures, kv_perm: Optional[torch.Tensor] = No
     """Return a FlexAttention mask_mod equivalent to the greedy gist mask AND causal.
 
     If kv_perm [B, T] is given, keys are assumed to be stored in that order (see
-    `gist_pool_permutation`): key slot j holds original position kv_perm[b, j], and
-    the rules below are evaluated on original positions.
+    `gist_pool_permutation`): key slot j holds original position kv_perm[b, j]. Key
+    features are gathered into that order once here, so the mask_mod reads them
+    directly by slot.
 
-    Rules (q = query index, k = key index):
-      R1  summary tokens: the top level is visible to every query; level l < top only
-          within the query's section of level l (no higher gist in between).
-      R2  local window: raw and level-0 keys in the same level-0 chunk or the previous P
-          chunks, for queries that are not summary tokens of level >= 1. (Higher gists
-          are left to R1; see make_hierarchical_gist_mask_greedy.)
-      R3  a level-l gist sees the level-(l-1) gists of its own level-l chunk.
-      R4  if P > 0, queries below level l+1 also see level-(l-1) gists in the previous
-          P level-l chunks (this window may cross section boundaries, as in the
-          original mask).
-      R5  attention sink: keys before sink_end.
-      R6  raw window (W > 0): raw queries also see raw keys among the last W
-          positions. Once gists are inserted everywhere, R2 alone would leave a
-          generated token only 4-8 exact tokens (L=4, P=1); the window keeps recent
-          text exact. Summary queries are excluded, so a gist still summarizes
-          exactly its chunk.
+    Rules (q = query position, k = key position, l(.) = level, -1 for raw tokens):
+      R1  summary visible: l(k) >= 0 and q < close[k]. A gist is visible until a gist
+          of a higher level closes it (the top level never closes).
+      R2  local chunk: l(q) <= 0, l(k) <= 0 and k >= start[q] (the query's level-0
+          chunk, or P chunks back).
+      R3  parent reads its children: l(q) = l(k) + 1 and q = par[k].
+      R4  if P > 0: l(k) >= 0 below the top, par[k] < q <= par_p[k] and l(q) <= l(k)+1
+          (children of the previous P parents).
+      R5  attention sink: k < sink_end.
+      R6  raw window (W > 0): raw q and raw k with q - k < W. Once gists are inserted
+          everywhere, R2 alone would leave a generated token only 4-8 exact tokens
+          (L=4, P=1); the window keeps recent text exact. Summary queries are
+          excluded, so a gist still summarizes exactly its chunk.
     Examples without summary tokens fall back to plain causal attention; padded keys
     are never visible.
     """
-    L = f.is_gist.shape[0]
-    P = f.num_previous_chunks
-    is_gist, chunk, section, any_ge = f.is_gist, f.chunk, f.section, f.any_ge
-    sink_end, has_gist, is_pad = f.sink_end, f.has_gist, f.is_pad
-    W = f.raw_window
+    P, W, top = f.num_previous_chunks, f.raw_window, f.num_levels - 1
+    level, start, sink_end, has_gist, is_pad = f.level, f.start, f.sink_end, f.has_gist, f.is_pad
+    if kv_perm is None:
+        k_pos = None
+        k_level, k_close, k_par, k_par_p, k_pad = level, f.close, f.par, f.par_p, is_pad
+    else:
+        k_pos = kv_perm.to(torch.int32)
+        k_level, k_close, k_par, k_par_p, k_pad = (
+            t.gather(1, kv_perm) for t in (level, f.close, f.par, f.par_p, is_pad))
 
     def mask_mod(b, h, q_idx, kv_idx):
-        if kv_perm is not None:
-            kv_idx = kv_perm[b, kv_idx]
-        # R1
-        vis = is_gist[L - 1][b, kv_idx]
-        for lvl in range(L - 1):
-            vis = vis | (is_gist[lvl][b, kv_idx] & (section[lvl][b, q_idx] == section[lvl][b, kv_idx]))
-
-        # R2
-        d0 = chunk[0][b, q_idx] - chunk[0][b, kv_idx]
-        vis = vis | (((d0 == 0) | ((d0 > 0) & (d0 <= P))) & ~any_ge[1][b, q_idx] & ~any_ge[1][b, kv_idx])
-
-        # R3 / R4
-        for lvl in range(1, L):
-            dl = chunk[lvl][b, q_idx] - chunk[lvl][b, kv_idx]
-            prev_gist_k = is_gist[lvl - 1][b, kv_idx]
-            vis = vis | ((dl == 0) & prev_gist_k & is_gist[lvl][b, q_idx])
-            if P > 0:
-                vis = vis | ((dl > 0) & (dl <= P) & prev_gist_k & ~any_ge[lvl + 1][b, q_idx])
-
-        # R5
-        vis = vis | (kv_idx < sink_end[b])
-
-        # R6
-        if W > 0:
-            raw_q = ~any_ge[0][b, q_idx] & ~is_pad[b, q_idx]
-            vis = vis | ((q_idx - kv_idx < W) & raw_q & ~any_ge[0][b, kv_idx])
-
+        k = kv_idx if k_pos is None else k_pos[b, kv_idx]
+        lq, lk = level[b, q_idx], k_level[b, kv_idx]
+        gist_k = lk >= 0
+        vis = gist_k & (q_idx < k_close[b, kv_idx])                                  # R1
+        vis = vis | ((lq <= 0) & (lk <= 0) & (k >= start[b, q_idx]))                  # R2
+        vis = vis | (gist_k & (lq == lk + 1) & (q_idx == k_par[b, kv_idx]))           # R3
+        if P > 0:                                                                     # R4
+            par_k = k_par[b, kv_idx]
+            vis = vis | (gist_k & (lk < top) & (par_k < q_idx) & (q_idx <= k_par_p[b, kv_idx])
+                         & (lq <= lk + 1))
+        vis = vis | (k < sink_end[b])                                                 # R5
+        if W > 0:                                                                     # R6
+            vis = vis | ((lq < 0) & ~is_pad[b, q_idx] & (lk < 0) & (q_idx - k < W))
         vis = vis | ~has_gist[b]
-        return (kv_idx <= q_idx) & vis & ~is_pad[b, kv_idx]
+        return (k <= q_idx) & vis & ~k_pad[b, kv_idx]
 
     return mask_mod
 
@@ -158,7 +166,7 @@ def gist_pool_permutation(f: GistMaskFeatures) -> torch.Tensor:
     [B, T] (slot j holds position perm[b, j]) for gathering K/V and for
     `make_gist_mask_mod(f, kv_perm=perm)`.
     """
-    is_summary = f.any_ge[0]                                         # [B, T]
+    is_summary = f.level >= 0                                        # [B, T]
     T = is_summary.shape[1]
     pos = torch.arange(T, device=is_summary.device)
     return torch.argsort(is_summary.long() * T + pos[None, :], dim=1)
@@ -177,13 +185,13 @@ def make_gist_block_mask(
     import torch._inductor.config as inductor_config
     from torch.nn.attention.flex_attention import create_block_mask
 
-    B = f.is_gist.shape[1]
+    B = f.level.shape[0]
     # The mask_mod exceeds inductor's realize thresholds, so it would write the [T, T]
     # mask to memory (16 GB at 128K) instead of fusing it into the block reduction.
     with inductor_config.patch(realize_opcount_threshold=10_000, realize_reads_threshold=10_000,
                                realize_acc_reads_threshold=10_000):
         return create_block_mask(
             make_gist_mask_mod(f, kv_perm=kv_perm), B, None, seq_len, seq_len,
-            device=device or str(f.is_gist.device), BLOCK_SIZE=block_size,
+            device=device or str(f.level.device), BLOCK_SIZE=block_size,
             _compile=compile_mask,
         )
