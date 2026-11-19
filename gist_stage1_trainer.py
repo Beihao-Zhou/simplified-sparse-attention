@@ -32,6 +32,8 @@ def parse_args(argv=None):
     ap.add_argument("--model", default="Qwen/Qwen2.5-0.5B-Instruct")
     ap.add_argument("--data", required=True)
     ap.add_argument("--heldout", required=True)
+    ap.add_argument("--heldout_long", default=None,
+                    help="rows for eval lengths above 8192 (the last --eval_rows rows are used)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--lora", choices=["gist", "gist_kv", "all"], default="gist")
     ap.add_argument("--r", type=int, default=32)
@@ -178,6 +180,10 @@ def main(argv=None):
     Global_data.stage1 = stage1_config(args)
     train = datasets.load_from_disk(os.path.expanduser(args.data))
     held = datasets.load_from_disk(os.path.expanduser(args.heldout)).select(range(args.eval_rows))
+    held_long = held
+    if args.heldout_long:
+        hl = datasets.load_from_disk(os.path.expanduser(args.heldout_long))
+        held_long = hl.select(range(len(hl) - args.eval_rows, len(hl)))
     it = batches(train, args.seq_len, args.seed)
     log = open(os.path.join(args.out, "log.jsonl"), "a")
     accum = args.batch  # one sequence per forward
@@ -185,7 +191,8 @@ def main(argv=None):
     def evaluate(step):
         down = Global_data.stage1["down"]
         rec = {"step": step, "down": down,
-               **{f"suffix_kl_{L}": suffix_kl(model, teacher, held, L, args, down) for L in args.eval_len}}
+               **{f"suffix_kl_{L}": suffix_kl(model, teacher, held if L <= 8192 else held_long, L, args, down)
+                  for L in args.eval_len}}
         if groups["beta"]:
             rec["beta"] = beta_stats(model)
         print(json.dumps(rec), flush=True)
