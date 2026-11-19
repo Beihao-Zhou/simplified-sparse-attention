@@ -27,3 +27,13 @@ S4a,ctx2048_new64_n8,0,ms_per_token,1.125e+02,72ef063,2026-11-19
 S4a,grad_prompt0,0,rkl_grad_unselected_max,0.000e+00,72ef063,2026-11-19
 S4a,grad_prompt0,0,route_grad_unselected_frac,1.000e+00,72ef063,2026-11-19
 S4a,grad_prompt0,0,teacher_has_grad,0.000e+00,72ef063,2026-11-19
+S2,L2_per_head_ssa2,0,mass_recall,0.554,9bcc634,2026-11-19
+S2,L8_per_head_ssa2,0,mass_recall,0.132,9bcc634,2026-11-19
+S2,L16_per_head_ssa2,0,mass_recall,0.298,9bcc634,2026-11-19
+S2,L24_per_head_ssa2,0,mass_recall,0.164,9bcc634,2026-11-19
+S2,L8_group_union,0,mass_recall,0.285,9bcc634,2026-11-19
+S2,L16_group_union,0,mass_recall,0.473,9bcc634,2026-11-19
+S2,L24_group_union,0,mass_recall,0.362,9bcc634,2026-11-19
+S2,L8_level1_stage,0,oracle_chunks_kept,0.426,9bcc634,2026-11-19
+S2,L16_level1_stage,0,oracle_chunks_kept,0.574,9bcc634,2026-11-19
+S2,L24_level1_stage,0,oracle_chunks_kept,0.470,9bcc634,2026-11-19
