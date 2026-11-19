@@ -17,10 +17,13 @@ import torch
 from torch.nn.attention.flex_attention import flex_attention
 from transformers import AttentionInterface
 
+from gist_utils import Global_data
 from src.data.gist_flex_mask import (
     build_gist_mask_features,
     gist_pool_permutation,
+    make_block_mask,
     make_gist_block_mask,
+    make_teacher_mask_mod,
 )
 
 GIST_FLEX = "gist_flex"
@@ -74,7 +77,19 @@ def prepare_gist_flex(
         f, input_ids.shape[1], block_size=block_size, kv_perm=perm,
         compile_mask=input_ids.is_cuda,
     )
-    return {"gist_block_mask": block_mask, "gist_kv_perm": perm}
+    out = {"gist_block_mask": block_mask, "gist_kv_perm": perm}
+    if Global_data.stage1 is not None:
+        # Stage-1 teacher masks share the features and key order; loss rows are raw,
+        # non-pad tokens past the sink.
+        B, T = input_ids.shape
+        names = {n for pair in Global_data.stage1["pairs"] for n in pair} | {Global_data.stage1["down"]}
+        out["gist_teacher_masks"] = {
+            n: make_block_mask(make_teacher_mask_mod(f, n, kv_perm=perm), B, T, block_size,
+                               str(input_ids.device), input_ids.is_cuda)
+            for n in names - {"hier"}}
+        pos = torch.arange(T, device=input_ids.device)[None]
+        out["gist_loss_rows"] = (f.level < 0) & ~f.is_pad & (pos >= f.sink_end[:, None])
+    return out
 
 
 def gist_flex_attention_forward(
@@ -104,14 +119,51 @@ def gist_flex_attention_forward(
     key = key.gather(2, idx)
     value = value.gather(2, idx)
 
-    out = _flex(query.device)(
-        query, key, value,
-        block_mask=gist_block_mask,
-        scale=scaling,
-        enable_gqa=query.shape[1] != H_kv,
-        kernel_options=_kernel_options(),
-    )
-    return out.transpose(1, 2).contiguous(), None
+    def attend(block_mask):
+        out = _flex(query.device)(
+            query, key, value,
+            block_mask=block_mask,
+            scale=scaling,
+            enable_gqa=query.shape[1] != H_kv,
+            kernel_options=_kernel_options(),
+        )
+        return out.transpose(1, 2).contiguous()
+
+    st = Global_data.stage1
+    if st is None:
+        return attend(gist_block_mask), None
+    return _stage1_attention(module, attend, gist_block_mask, kwargs["gist_teacher_masks"],
+                             kwargs["gist_loss_rows"], st), None
+
+
+def _rel_mse(student: torch.Tensor, teacher: torch.Tensor, rows: torch.Tensor) -> torch.Tensor:
+    """Mean over loss rows of ||s - t||^2 / ||t||^2, outputs after o_proj ([B, T, D])."""
+    s, t = student[rows].float(), teacher[rows].float()
+    return ((s - t).pow(2).sum(-1) / (t.pow(2).sum(-1) + 1e-6)).mean()
+
+
+def _stage1_attention(module, attend, hier_mask, teacher_masks, rows, st):
+    """Per-layer MSE of stage 1 (docs/opsd-handoff.md): the same q/k/v under several masks.
+
+    st["pairs"] lists (student, teacher) mask names, e.g. ("g1", "raw"), ("hier", "g1");
+    a name that appears only as a teacher is computed without grad. st["down"] is the
+    output passed to the next layer. Losses are appended to st["losses"][pair].
+    """
+    masks = {"hier": hier_mask, **teacher_masks}
+    students = {s for s, _ in st["pairs"]} | {st["down"]}
+    outs = {}
+    for name in sorted({n for pair in st["pairs"] for n in pair} | {st["down"]}):
+        if name in students:
+            outs[name] = attend(masks[name])
+        else:
+            with torch.no_grad():
+                outs[name] = attend(masks[name])
+    B, T = rows.shape
+    proj = {n: module.o_proj(o.reshape(B, T, -1)) for n, o in outs.items()}
+    for s_name, t_name in st["pairs"]:
+        st["losses"].setdefault(f"{s_name}|{t_name}", []).append(
+            _rel_mse(proj[s_name], proj[t_name].detach(), rows))
+    return outs[st["down"]]
 
 
 AttentionInterface.register(GIST_FLEX, gist_flex_attention_forward)

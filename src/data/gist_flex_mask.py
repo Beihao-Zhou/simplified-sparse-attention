@@ -158,6 +158,42 @@ def make_gist_mask_mod(f: GistMaskFeatures, kv_perm: Optional[torch.Tensor] = No
     return mask_mod
 
 
+def make_teacher_mask_mod(f: GistMaskFeatures, kind: str, kv_perm: Optional[torch.Tensor] = None):
+    """Teacher masks for the per-layer MSE of stage 1, from the same features and key order.
+
+      raw  every raw key and no summary key: plain causal attention over the raw text
+      g1   single-level gist mask: level-0 summaries stay visible once written (no higher
+           level closes them), raw keys follow R2/R5/R6, higher-level summaries are not keys
+
+    A query always sees itself, so summary rows stay well defined.
+    """
+    if kind not in ("raw", "g1"):
+        raise ValueError(f"unknown teacher mask {kind!r}")
+    W = f.raw_window
+    level, start, sink_end, has_gist, is_pad = f.level, f.start, f.sink_end, f.has_gist, f.is_pad
+    if kv_perm is None:
+        k_pos, k_level, k_pad = None, level, is_pad
+    else:
+        k_pos = kv_perm.to(torch.int32)
+        k_level, k_pad = (t.gather(1, kv_perm) for t in (level, is_pad))
+
+    def mask_mod(b, h, q_idx, kv_idx):
+        k = kv_idx if k_pos is None else k_pos[b, kv_idx]
+        lk = k_level[b, kv_idx]
+        if kind == "raw":
+            vis = lk < 0
+        else:
+            lq = level[b, q_idx]
+            vis = (lk == 0) | ((lq <= 0) & (lk < 0) & (k >= start[b, q_idx]))
+            vis = vis | ((k < sink_end[b]) & (lk <= 0))
+            if W > 0:
+                vis = vis | ((lq < 0) & ~is_pad[b, q_idx] & (lk < 0) & (q_idx - k < W))
+            vis = vis | ~has_gist[b]
+        return (k <= q_idx) & (vis | (k == q_idx)) & ~k_pad[b, kv_idx]
+
+    return mask_mod
+
+
 def gist_pool_permutation(f: GistMaskFeatures) -> torch.Tensor:
     """Key order [raw tokens | summary tokens], each in original order.
 
@@ -182,16 +218,19 @@ def make_gist_block_mask(
 ):
     """BlockMask shared by all heads. Use compile_mask=True on GPU: otherwise the
     mask is evaluated on the full T x T grid."""
+    return make_block_mask(make_gist_mask_mod(f, kv_perm=kv_perm), f.level.shape[0], seq_len,
+                           block_size, device or str(f.level.device), compile_mask)
+
+
+def make_block_mask(mask_mod, B: int, seq_len: int, block_size: int, device: str,
+                    compile_mask: bool = False):
+    """BlockMask for any of the mask_mods above (shared by all heads)."""
     import torch._inductor.config as inductor_config
     from torch.nn.attention.flex_attention import create_block_mask
 
-    B = f.level.shape[0]
     # The mask_mod exceeds inductor's realize thresholds, so it would write the [T, T]
     # mask to memory (16 GB at 128K) instead of fusing it into the block reduction.
     with inductor_config.patch(realize_opcount_threshold=10_000, realize_reads_threshold=10_000,
                                realize_acc_reads_threshold=10_000):
-        return create_block_mask(
-            make_gist_mask_mod(f, kv_perm=kv_perm), B, None, seq_len, seq_len,
-            device=device or str(f.level.device), BLOCK_SIZE=block_size,
-            _compile=compile_mask,
-        )
+        return create_block_mask(mask_mod, B, None, seq_len, seq_len, device=device,
+                                 BLOCK_SIZE=block_size, _compile=compile_mask)

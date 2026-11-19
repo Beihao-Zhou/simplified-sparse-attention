@@ -1231,6 +1231,12 @@ class GistQwen2Model(Qwen2PreTrainedModel):
 
         if inputs_embeds is None:
             inputs_embeds: torch.Tensor = self.embed_tokens(input_ids)
+        if input_ids is not None and Global_data.gist_token_id is not None:
+            # Rows the gist-only LoRA acts on (gist_lora.py); unused otherwise.
+            Global_data.lora_row_mask = torch.isin(
+                input_ids, torch.tensor(Global_data.gist_token_id, device=input_ids.device))
+        if Global_data.stage1 is not None:
+            Global_data.stage1["losses"] = {}
 
         if use_cache and past_key_values is None:
             past_key_values = DynamicCache(config=self.config)
@@ -1378,6 +1384,21 @@ def chunked_causal_lm_loss(hidden_states, lm_head, labels, chunk_size, num_items
     if torch.is_tensor(num_items_in_batch):
         num_items_in_batch = num_items_in_batch.to(total.device)
     return total / num_items_in_batch
+
+
+def stage1_loss(hidden_states, lm_head, labels, num_items_in_batch=None):
+    """Stage-1 objective: per (student, teacher) pair the mean over layers of the per-layer
+    relMSE (gist_flex_attention._stage1_attention), summed over pairs, plus lambda_ntp times
+    the LM loss. Logits are not materialized when lambda_ntp = 0."""
+    st = Global_data.stage1
+    loss = sum(torch.stack(v).mean() for v in st["losses"].values())
+    st["last"] = {k: float(torch.stack(v).mean()) for k, v in st["losses"].items()}
+    if st.get("lambda_ntp", 0) > 0:
+        ntp = chunked_causal_lm_loss(hidden_states, lm_head, labels,
+                                     Global_data.loss_chunk_size or 1024, num_items_in_batch)
+        st["last"]["ntp"] = float(ntp)
+        loss = loss + st["lambda_ntp"] * ntp
+    return loss, None
 
 
 def masked_kl_vocab(teacher_logits, student_logits, mask, temperature=1.0):
@@ -1551,7 +1572,9 @@ class GistQwen2ForCausalLM(Qwen2PreTrainedModel, GistGenerationMixin):
                 )
 
                 hidden_states = outputs.last_hidden_state
-                if self.training and labels is not None and Global_data.loss_chunk_size > 0:
+                if Global_data.stage1 is not None and labels is not None:
+                    loss, logits = stage1_loss(hidden_states, self.lm_head, labels, kwargs.get("num_items_in_batch"))
+                elif self.training and labels is not None and Global_data.loss_chunk_size > 0:
                     loss = chunked_causal_lm_loss(hidden_states, self.lm_head, labels,
                                                   Global_data.loss_chunk_size,
                                                   kwargs.get("num_items_in_batch"))

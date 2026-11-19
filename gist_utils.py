@@ -39,6 +39,11 @@ class Global_data:
     last_pos = None
     # OPSD replay state (gist_opsd.replay); None outside a replay forward.
     opsd_replay = None
+    # Stage-1 per-layer MSE config (gist_flex_attention._stage1_attention); None = off.
+    # {"pairs": [(student, teacher), ...], "down": mask passed downstream, "lambda_ntp": float}
+    stage1 = None
+    # [B, T] bool, summary-token rows of the current forward (gist_lora.LoRALinear).
+    lora_row_mask = None
     sep_num = 0
     add_raw = False
     kl_loss = False
