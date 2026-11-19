@@ -1,0 +1,26 @@
+benchmark/Longbench_exp/longbench_pred.py
+  s_466735a13fa48a::t_f99c493072972f 262,334
+  s_466735a13fa48a::t_190fc487217727 331-333,335-338
+attn_candidate.py
+  s_466735a13fa48a::t_b7bf6e42308906 535-541
+experiments/routing_record.py
+  s_466735a13fa48a::t_ca65928b2479ab 1-95
+tests/test_routing_record.py
+  s_466735a13fa48a::t_78014a744663f3 1-87
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "7ef25b0439180d5be65a77b95d36677467385339",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
