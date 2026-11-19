@@ -1,0 +1,33 @@
+gist_qwen2.py
+  s_466735a13fa48a::t_16f3d12d81ccf2 1234
+  s_466735a13fa48a::t_826ebf64e61824 1235-1239,1389-1403,1575-1577
+tests/test_stage1.py
+  s_466735a13fa48a::t_b2fa646cf83fca 86-87
+  s_466735a13fa48a::t_fa8ce8f83eb300 1-85,88-105
+gist_flex_attention.py
+  s_466735a13fa48a::t_48fc210bcc0094 20,24,26,80-92,122-166
+src/data/gist_flex_mask.py
+  s_466735a13fa48a::t_b2b0f5524d3bf7 161-196,221-227,235-236
+gist_utils.py
+  s_466735a13fa48a::t_826ebf64e61824 42-46
+tests/test_teacher_masks.py
+  s_466735a13fa48a::t_daeb45b3da7b09 1-62
+gist_lora.py
+  s_466735a13fa48a::t_1fe1aba9b76953 1-64
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "b2735bd97d5c6306677069f4c718e5a09ba82158",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
