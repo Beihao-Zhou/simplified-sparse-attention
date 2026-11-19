@@ -259,7 +259,7 @@ def get_pred(
         return
 
     data_ = data[start:start + max_samples]
-    for json_obj in tqdm(data_):
+    for i_obj, json_obj in enumerate(tqdm(data_)):
         prompt = prompt_format.format(**json_obj)
         # truncate to fit max_length (we suggest truncate in the middle, since the left and right side may contain crucial instructions)
         tokenized_prompt = tokenizer(
@@ -328,6 +328,14 @@ def get_pred(
                     sink_size,
                 )
             output_sequence = prefix + doc_with_gist + prompt_ids
+            if os.environ.get("ROUTING_RECORD_DIR"):
+                from experiments.routing_record import answer_chunks, length_bucket
+                Global_data.routing_meta = {
+                    "task": dataset, "sample": start + i_obj, "calls": {},
+                    "bucket": length_bucket(len(input_ids)),
+                    "answer0": answer_chunks(output_sequence, Global_data.gist_token_id,
+                                             json_obj["answers"], tokenizer),
+                }
             input_ids = torch.tensor([output_sequence], device = model.device)
             attention_mask = torch.tensor([[1 for _ in output_sequence]], device = model.device)
 

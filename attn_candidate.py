@@ -532,6 +532,13 @@ def _decode_forward(module, query, key, value, attention_mask, scaling, dropout,
     else:
         _extend_cache_one_step(cache, B, k_len, device, input_ids)
 
+    # Routing analysis (experiments/routing_record.py); inert unless ROUTING_RECORD_DIR set.
+    _rec_dir = os.environ.get("ROUTING_RECORD_DIR")
+    if _rec_dir:
+        from experiments.routing_record import record_decode_call
+        record_decode_call(_rec_dir, module, query, key, cache, top_k, scaling,
+                           getattr(Global_data, "routing_meta", None))
+
     # ----- Per-call dynamic state -----
     # LAZY: these [B,k_len] tensors are identical across all layers in a step and
     # are ONLY consumed by the non-compact (sparse-mask / eager) branches. The
