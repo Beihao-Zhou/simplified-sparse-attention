@@ -49,6 +49,8 @@ Nov 19, 2026 · @Someone（Nov 19 更新：设计决定、spike 计划、代码�
 
 **每个 summary 有自己的 mass 偏置 β，由内容算出。** β<sub>t</sub> = b<sub>level</sub> + u<sub>level</sub> · RMSNorm(h<sub>t</sub>)，每个 KV head 一个；同时加在 attention logit 与路由分数上，使两者一致。b<sub>level</sub> 初始为 log（这一级覆盖的原始 token 数），即 log 4 与 log 16，u 初始为 0；这个初值来自 log Σ<sub>j</sub> exp(q·k<sub>j</sub>) ≥ log n + q·k̄。原来的「每级一个标量 bias」在同一级的 softmax 里是常数，只能校准 summary 与原始 key 之间的 mass，路由 KL 对它的梯度恒为 0；而 chunk 的 log-sum-exp mass 还取决于块内 key 的分散程度（例如有没有一个突出的 needle），单个 key 向量表达不了，需要每个 summary 自己的 β。β 由 MSE、反向 KL 与路由 KL 共同训练。
 
+**gist 与 meta-gist 默认共用一套 gist LoRA。** 共用时每个参数见到的数据更多，层数加深时参数不增长（适合 O(log T) 层的深树），层级身份由各级不同的 embedding（`<G1>`、`<G2>`）从第一层起区分；mass 尺度的差别由各级自己的 b<sub>level</sub>、u<sub>level</sub> 处理。每级一套的理由是两级的输入分布不同（gist 读原始 token，meta-gist 读 gist），以及分阶段训练可以在训第二级时冻结第一级，使目标 `o_g1` 真正不动。因此 S3 的分阶段配置用每级一套并在第二阶段冻结第一级；若「分阶段 + 每级一套」明显优于「同时训 + 共用」，在 M2 补「同时训 + 每级一套」，把训练顺序与参数分开两个因素拆开。
+
 **路由保持逐级自顶向下。** 每一级只在同级候选里做 top-k，与 SSA、CUDA kernel 和 adaptive top-k 一致，路由 KL 按级定义。跨级的 best-first tree cut 只在路由上限的 spike 里离线比较；若它在相同打分成本下明显更好，再作为后续项目，届时 β 已能让不同级的分数直接比较。
 
 **梯度在层之间连通，不做逐层 detach。** 梯度落点有一个结构性的不对称：gist 被读的一侧（W<sup>g</sup><sub>K</sub>、W<sup>g</sup><sub>V</sub>、β）在每一层直接收到 MSE 与路由 KL 的梯度；写的一侧（W<sup>g</sup><sub>Q</sub>、W<sup>g</sup><sub>O</sub>，决定 gist 从自己的 chunk 读什么、写回什么）只能从更高层的 loss 经若干层反传收到梯度，最后一层完全没有。因此逐层 detach 会让写的一侧学不到东西；最后一层不建 W<sup>g</sup><sub>Q</sub>、W<sup>g</sup><sub>O</sub>；训练中按参数组（W<sup>g</sup><sub>Q/O</sub>、W<sup>g</sup><sub>K/V</sub>、β、embedding）逐层记录梯度范数，监测写的一侧是否跟得上。只给 gist 专属 K、V 的变体（D-kv）作为 ablation，它与完整方案 D 的差距衡量「学会写」的价值。
@@ -134,7 +136,7 @@ x1 x2 g1 x3 x4 g2 G1 | x5 x6 g3 x7 x8 g4 G2 | suffix ...
 
 **仓库组织**：remote 里你的 fork 是 `Beihao-Zhou/simplified-sparse-attention`，原作者的仓库是 `yuzhenmao/simplified-sparse-attention`；只往 fork 推送、开 issue。issue 跟踪见 `docs/agents/issue-tracker.md`。spike 共用 `opsd/spikes`；之后的 milestone 每个功能一个分支（`stage1-layerwise-mse`、`routing-kl`、`stage2-record-replay`、`stage2-opsd`、`explore-gumbel`），一个功能一个 PR。
 
-**开关**（默认值 = 原版 SSA）：`trainable` ∈ {`full`（默认）, `gist_lora`（方案 D）, `gist_kv`（D-kv）, `gist_full`（全秩方案 D）, `lora`（方案 B）}、`lora_r`（32）、`gist_mlp`、`position_rule` ∈ {`shift`（默认）, `raw`}、`layerwise_mse`、`lambda_ntp`、`lambda_route`、`summary_bias` ∈ {`none`（默认）, `level`, `content`}、`record_selection`、`replay_selection`、`gumbel_tau`（0 = 关）、`share_selection_across_layers`。
+**开关**（默认值 = 原版 SSA）：`trainable` ∈ {`full`（默认）, `gist_lora`（方案 D）, `gist_kv`（D-kv）, `gist_full`（全秩方案 D）, `lora`（方案 B）}、`lora_r`（32）、`gist_lora_per_level`（默认关）、`freeze_lower_levels`、`gist_mlp`、`position_rule` ∈ {`shift`（默认）, `raw`}、`layerwise_mse`、`lambda_ntp`、`lambda_route`、`summary_bias` ∈ {`none`（默认）, `level`, `content`}、`record_selection`、`replay_selection`、`gumbel_tau`（0 = 关）、`share_selection_across_layers`。
 
 ## Spikes
 
@@ -146,7 +148,7 @@ x1 x2 g1 x3 x4 g2 G1 | x5 x6 g3 x7 x8 g4 G2 | suffix ...
 
 **OPSD 的机制是否写对？** 在未训练的 gist 上，按新位置规则跑 rollout（ref 路径）→ 原始序列上的老师 → 按记录的选择 replay。成本：几分钟，插在阶段一试验之间跑。replay 与 rollout 的生成 token log 概率最大绝对差 < 1e-3（fp32）、全部展开时 KL < 1e-3 为通过；任一不过都是 bug，修复而不是调参。
 
-**两层树的阶段一能不能学？** 0.5B、chunk4-chunk4、8K 训练、约 500 步（8 × 8K），8K 与 16K 两个长度评测，三个配置：方案 D 两级同时训、方案 D 分阶段训、方案 B 两级同时训，LoRA 都取 r = 32，都开路由 KL（小 λ\_r）和内容相关的 β，并记录各参数组的逐层梯度范数。成本：每个配置 L4 上 2–6 小时，H100 上不到 1 小时。通过条件：两级 MSE 都下降，不展开时的后缀 KL 比第 0 步下降 ≥ 30%，方案 D 的后缀 KL 不超过方案 B 的 1.2 倍。方案 D 超过 1.2 倍说明容量不够，依次试更大的 r、`gist_mlp`、读侧 LoRA；方案 B 逐层 MSE 更低而后缀 KL 更高，说明出现了退化解；两级 MSE 都不降，停下来重新考虑阶段一。
+**两层树的阶段一能不能学？** 0.5B、chunk4-chunk4、8K 训练、约 500 步（8 × 8K），8K 与 16K 两个长度评测，三个配置：方案 D 两级同时训（两级共用 gist LoRA）、方案 D 分阶段训（每级一套 gist LoRA，第二阶段冻结第一级）、方案 B 两级同时训，LoRA 都取 r = 32，都开路由 KL（小 λ\_r）和内容相关的 β，并记录各参数组的逐层梯度范数。成本：每个配置 L4 上 2–6 小时，H100 上不到 1 小时。通过条件：两级 MSE 都下降，不展开时的后缀 KL 比第 0 步下降 ≥ 30%，方案 D 的后缀 KL 不超过方案 B 的 1.2 倍。方案 D 超过 1.2 倍说明容量不够，依次试更大的 r、`gist_mlp`、读侧 LoRA；方案 B 逐层 MSE 更低而后缀 KL 更高，说明出现了退化解；两级 MSE 都不降，停下来重新考虑阶段一。
 
 **OPSD 的训练信号是否有效？** 接着上一项的方案 D 模型，4K 上下文、生成 128 个 token、batch 8、约 300 步。成本：L4 上 3–12 小时（受 ref decode 的开销限制，H100 只快约 2 倍）。生成 token 的平均反向 KL 下降 ≥ 20%、每步展开数变化 < 5% 为通过；KL 不动说明信号太弱，展开数上升说明预算有泄漏。
 
@@ -200,7 +202,8 @@ spike 全部通过后按顺序执行；每一项的验收标准满足后才进�
 | --- | --- |
 | 阶段一目标 | 纯 NTP（原版）/ 纯逐层 MSE / 两者相加 |
 | 老师链 | 直接对 `o_raw` 匹配 / 逐级老师链；局部老师 / 全局老师 |
-| 两级训练方式 | 同时训 / 分阶段训 |
+| 两级训练方式 | 同时训 / 分阶段训（第二阶段冻结第一级） |
+| 各级的 gist LoRA | 共用（默认）/ 每级一套 / 共用 + 每级小 delta |
 | 路由 KL | 无 / 只在阶段一 / 只在阶段二 / 两阶段都有 |
 | 阶段二目标 | selective FT（NTP）/ OPSD / OPSD + NTP |
 | 可训练参数 | 全量（原版）/ 方案 D（gist 专属 LoRA）/ D-kv（只 K、V）/ 全秩方案 D（0.5B）/ 方案 D + gist MLP / 方案 D + 读侧 LoRA / 方案 B（同秩全局 LoRA q/k/v/o）/ 全局 LoRA 只 v/o；LoRA 秩 r |
@@ -246,8 +249,6 @@ spike 全部通过后按顺序执行；每一项的验收标准满足后才进�
 ## Open questions and risks
 
 原来的待确认问题都已解决：位置规则见「Design decisions」；阶段一的「逐层」就是本文的设计（同一组 q/k/v、多 mask、梯度跨层连通），老师用带 gist 的序列；没有比公开版更新的内部分支；`masked_kl_vocab` 未被调用，`--klloss` 的逐层对齐默认关闭；起步模型 Qwen2.5-0.5B-Instruct，H100 几天内到；训练数据沿用 SSA，agent 数据需要时自己找。新的未定项出现时，停下来问人。
-
-**待定：gist 与 meta-gist 共用一套 LoRA，还是每级一套。** 共用时每层参数少、数据多，层数加深时参数不增长，层级身份由各级不同的 embedding 区分；每级一套时两级的输入分布（gist 读原始 token，meta-gist 读 gist）各有各的投影，而且分阶段训练可以在训第二级时干净地冻结第一级。LoRA 参数化下每级一套的成本可以忽略。
 
 **待定：展开后 summary 是否仍可见。** SSA 的 SG+SR 让被选中的 summary 和它的原始 KV 同时可见；替换式展开则只保留原始 KV。前者是原版推理的行为，后者才让噪声底严格为 0。OPSD 机制的 spike 两种都测，用两者的 KL 差与质量差决定阶段二用哪一种。
 
