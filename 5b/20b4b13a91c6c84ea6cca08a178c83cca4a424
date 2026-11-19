@@ -1,0 +1,22 @@
+docs/opsd-handoff.md
+  s_466735a13fa48a::t_b471c987d1316c 151
+  s_466735a13fa48a::t_740cd454726751 205-206
+  s_466735a13fa48a::t_2c95a21adc7a9a 139
+  s_466735a13fa48a::t_11331dedb49de2 52-53
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "5b20b4b13a91c6c84ea6cca08a178c83cca4a424",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
