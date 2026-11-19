@@ -23,6 +23,7 @@ import torch
 import torch.nn.functional as F
 
 from gist_utils import Global_data
+from gist_routing import routing_kl
 from src.data.gist import make_hierarchical_gist_mask_greedy
 
 
@@ -142,37 +143,6 @@ def replay(model, ctx: torch.Tensor, y: torch.Tensor, steps, vocab: int,
     return lps, state
 
 
-def routing_kl(q: torch.Tensor, k: torch.Tensor, ids: torch.Tensor, scaling: float) -> torch.Tensor:
-    """Mean over heads, rows and levels of KL(p* || softmax(z)).
-
-    q [H, R, d], k [H, K, d], ids [K]. Per level, z are the attention logits on that
-    level's summary keys and p* (no grad) the softmax over closed units of the
-    log-sum-exp of the logits on their raw keys.
-    """
-    logits = torch.einsum("hrd,hkd->hrk", q, k) * scaling          # [H, R, K]
-    gist_ids = Global_data.gist_token_id
-    is_sum = torch.isin(ids, torch.tensor(gist_ids, device=ids.device))
-    raw = ~is_sum
-    losses = []
-    for lvl, gid in enumerate(gist_ids):
-        is_g = ids == gid
-        G = int(is_g.sum())
-        if G < 2:
-            continue
-        unit = torch.cumsum(is_g.long(), 0)                         # raw key -> unit index
-        member = raw & (unit < G)
-        onehot = F.one_hot(unit[member], G).to(logits.dtype)         # [Kraw, G]
-        with torch.no_grad():
-            x = logits[..., member]
-            mx = x.amax(-1, keepdim=True)
-            mass = torch.einsum("hrk,kg->hrg", (x - mx).exp(), onehot)
-            p_star = mass / mass.sum(-1, keepdim=True)
-        z = logits[..., is_g]                                       # [H, R, G]
-        logq = F.log_softmax(z, dim=-1)
-        losses.append((p_star * (p_star.clamp_min(1e-30).log() - logq)).sum(-1).mean())
-    return torch.stack(losses).mean() if losses else logits.sum() * 0
-
-
 def replay_attention(module, query, key, value, scaling):
     """Generated rows of a replay: attend exactly to the recorded keys of this layer."""
     from gist_qwen2 import repeat_kv
@@ -188,7 +158,10 @@ def replay_attention(module, query, key, value, scaling):
     bias = torch.zeros(vis.shape, dtype=query.dtype, device=query.device).masked_fill(~vis, float("-inf"))
     out = F.scaled_dot_product_attention(query, k, v, attn_mask=bias, scale=scaling)
     if st["route_on"]:
-        st["route"].append(routing_kl(query[0], k[0], st["ids"][:k.shape[2]], scaling))
+        K = k.shape[2]
+        q_pos = torch.arange(K - query.shape[2], K, device=query.device)
+        st["route"].append(routing_kl(query[0], q_pos, k[0], st["ids"][:K],
+                                      Global_data.gist_token_id, scaling))
     return out.transpose(1, 2).contiguous(), None
 
 

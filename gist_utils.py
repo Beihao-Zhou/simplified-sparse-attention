@@ -44,6 +44,8 @@ class Global_data:
     stage1 = None
     # [B, T] bool, summary-token rows of the current forward (gist_lora.LoRALinear).
     lora_row_mask = None
+    # [B, T] long, -1 for raw tokens and l for level-l summaries (per-level LoRA, beta).
+    lora_row_level = None
     sep_num = 0
     add_raw = False
     kl_loss = False

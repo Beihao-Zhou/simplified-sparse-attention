@@ -1235,6 +1235,9 @@ class GistQwen2Model(Qwen2PreTrainedModel):
             # Rows the gist-only LoRA acts on (gist_lora.py); unused otherwise.
             Global_data.lora_row_mask = torch.isin(
                 input_ids, torch.tensor(Global_data.gist_token_id, device=input_ids.device))
+            Global_data.lora_row_level = torch.full_like(input_ids, -1)
+            for _lvl, _g in enumerate(Global_data.gist_token_id):
+                Global_data.lora_row_level[input_ids == _g] = _lvl
         if Global_data.stage1 is not None:
             Global_data.stage1["losses"] = {}
 
@@ -1391,7 +1394,8 @@ def stage1_loss(hidden_states, lm_head, labels, num_items_in_batch=None):
     relMSE (gist_flex_attention._stage1_attention), summed over pairs, plus lambda_ntp times
     the LM loss. Logits are not materialized when lambda_ntp = 0."""
     st = Global_data.stage1
-    loss = sum(torch.stack(v).mean() for v in st["losses"].values())
+    w = st.get("weights", {})
+    loss = sum(w.get(k, 1.0) * torch.stack(v).mean() for k, v in st["losses"].items())
     st["last"] = {k: float(torch.stack(v).mean()) for k, v in st["losses"].items()}
     if st.get("lambda_ntp", 0) > 0:
         ntp = chunked_causal_lm_loss(hidden_states, lm_head, labels,

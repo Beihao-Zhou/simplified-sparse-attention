@@ -17,33 +17,89 @@ from gist_utils import Global_data
 
 
 class LoRALinear(nn.Module):
-    def __init__(self, base: nn.Linear, r: int, gist_rows_only: bool):
+    """base(x) + B A x. With gist_rows_only the delta applies to summary rows only; with
+    num_levels > 1 each summary level has its own (A, B), selected by
+    Global_data.lora_row_level (-1 raw, l for a level-l summary)."""
+
+    def __init__(self, base: nn.Linear, r: int, gist_rows_only: bool, num_levels: int = 1):
         super().__init__()
         self.base = base
         self.gist_rows_only = gist_rows_only
-        self.lora_A = nn.Parameter(torch.empty(r, base.in_features, dtype=torch.float32))
-        self.lora_B = nn.Parameter(torch.zeros(base.out_features, r, dtype=torch.float32))
-        nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5))
+        self.lora_A = nn.ParameterList(
+            nn.Parameter(nn.init.kaiming_uniform_(torch.empty(r, base.in_features), a=math.sqrt(5)))
+            for _ in range(num_levels))
+        self.lora_B = nn.ParameterList(
+            nn.Parameter(torch.zeros(base.out_features, r)) for _ in range(num_levels))
 
     @property
     def weight(self):
         return self.base.weight
 
     def forward(self, x):
-        delta = (x.to(self.lora_A.dtype) @ self.lora_A.t()) @ self.lora_B.t()
-        if self.gist_rows_only:
-            delta = delta * Global_data.lora_row_mask[..., None].to(delta.dtype)
+        xf = x.to(torch.float32)
+        if len(self.lora_A) == 1:
+            delta = (xf @ self.lora_A[0].t()) @ self.lora_B[0].t()
+            if self.gist_rows_only:
+                delta = delta * Global_data.lora_row_mask[..., None].to(delta.dtype)
+        else:
+            delta = 0
+            for lvl, (A, B) in enumerate(zip(self.lora_A, self.lora_B)):
+                rows = (Global_data.lora_row_level == lvl)[..., None].to(xf.dtype)
+                delta = delta + ((xf @ A.t()) @ B.t()) * rows
         return self.base(x) + delta.to(x.dtype)
 
 
-def apply_lora(model, mode: str, r: int = 32) -> Dict[str, List[nn.Parameter]]:
+class SummaryBias(nn.Module):
+    """beta_t = b[l] + u[l] . x_t for a level-l summary token (0 for raw tokens), per KV
+    head; x_t is the attention input (already RMS-normalized). b starts at log(tokens the
+    level covers), u at 0."""
+
+    def __init__(self, hidden: int, num_kv: int, spans):
+        super().__init__()
+        self.b = nn.Parameter(torch.tensor([[math.log(s)] * num_kv for s in spans]))
+        self.u = nn.Parameter(torch.zeros(len(spans), hidden, num_kv))
+
+    def forward(self, x: torch.Tensor, level: torch.Tensor) -> torch.Tensor:
+        """x [B, T, hidden], level [B, T] -> beta [B, num_kv, T]."""
+        beta = torch.zeros(*level.shape, self.b.shape[1], device=x.device)
+        for lvl in range(self.b.shape[0]):
+            rows = (level == lvl)[..., None]
+            beta = beta + rows * (self.b[lvl] + x.float() @ self.u[lvl])
+        return beta.transpose(1, 2)
+
+
+def _capture_input(module, args, kwargs):
+    module._bias_x = kwargs.get("hidden_states", args[0] if args else None)
+
+
+def apply_summary_bias(model, spans=(4, 16)) -> list:
+    """Attach a SummaryBias to every attention layer; returns its parameters."""
+    params = []
+    cfg = model.config
+    for layer in model.model.layers:
+        attn = layer.self_attn
+        attn.summary_bias = SummaryBias(cfg.hidden_size, cfg.num_key_value_heads, spans).to(
+            attn.q_proj.weight.device)
+        attn.register_forward_pre_hook(_capture_input, with_kwargs=True)
+        params += list(attn.summary_bias.parameters())
+    return params
+
+
+def apply_lora(model, mode: str, r: int = 32, per_level: bool = False) -> Dict[str, List[nn.Parameter]]:
     """mode: 'gist' (D, gist rows; last layer K/V only), 'gist_kv' (D-kv, K/V only in
-    every layer) or 'all' (B). Freezes the model and returns trainable groups."""
+    every layer) or 'all' (B). per_level: one adapter per summary level (D only).
+    Freezes the model and returns trainable groups; groups['level<l>'] lists the
+    level-l adapters when per_level."""
     if mode not in ("gist", "gist_kv", "all"):
         raise ValueError(f"unknown LoRA mode {mode!r}")
     for p in model.parameters():
         p.requires_grad_(False)
+    if per_level and mode == "all":
+        raise ValueError("per-level adapters need gist-row LoRA")
+    n_lv = len(Global_data.gist_token_id) if per_level else 1
     groups: Dict[str, List[nn.Parameter]] = {"lora_qo": [], "lora_kv": [], "embed": []}
+    for lvl in range(n_lv if per_level else 0):
+        groups[f"level{lvl}"] = []
     layers = model.model.layers
     for i, layer in enumerate(layers):
         attn = layer.self_attn
@@ -51,9 +107,11 @@ def apply_lora(model, mode: str, r: int = 32) -> Dict[str, List[nn.Parameter]]:
         for name in ("q_proj", "k_proj", "v_proj", "o_proj"):
             if mode != "all" and name in ("q_proj", "o_proj") and (last or mode == "gist_kv"):
                 continue
-            lora = LoRALinear(getattr(attn, name), r, gist_rows_only=mode != "all")
+            lora = LoRALinear(getattr(attn, name), r, gist_rows_only=mode != "all", num_levels=n_lv)
             setattr(attn, name, lora.to(getattr(attn, name).weight.device))
-            groups["lora_kv" if name in ("k_proj", "v_proj") else "lora_qo"] += [lora.lora_A, lora.lora_B]
+            groups["lora_kv" if name in ("k_proj", "v_proj") else "lora_qo"] += [*lora.lora_A, *lora.lora_B]
+            for lvl in range(n_lv if per_level else 0):
+                groups[f"level{lvl}"] += [lora.lora_A[lvl], lora.lora_B[lvl]]
 
     emb = model.get_input_embeddings().weight
     rows = torch.zeros(emb.shape[0], 1, dtype=emb.dtype, device=emb.device)

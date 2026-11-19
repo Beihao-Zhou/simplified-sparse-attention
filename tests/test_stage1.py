@@ -103,3 +103,54 @@ def test_no_summaries_no_loss(cfg):
     ids = torch.randint(1, 900, (1, 64))
     model(input_ids=ids, attention_mask=torch.ones_like(ids), labels=ids.clone())
     assert all(v < 1e-10 for v in Global_data.stage1["last"].values())
+
+
+def _flex_model(cfg, layers=3):
+    from gist_lora import apply_summary_bias
+    cfg._attn_implementation = gist_flex_attention.GIST_FLEX
+    cfg.num_hidden_layers = layers
+    Global_data.train_attn = "flex"
+    torch.manual_seed(0)
+    model = GistQwen2ForCausalLM(cfg).float().train()
+    return model, apply_summary_bias
+
+
+def test_beta_and_routing_get_gradients(cfg):
+    model, apply_summary_bias = _flex_model(cfg)
+    groups = apply_lora(model, "gist", r=4)
+    bias = apply_summary_bias(model)
+    Global_data.stage1 = {"pairs": [("g1", "raw"), ("hier", "g1")], "down": "hier", "lambda_ntp": 0.0,
+                          "route_rows": 16, "weights": {"route": 1.0}}
+    ids = _ids(300)
+    out = model(input_ids=ids, attention_mask=torch.ones_like(ids), labels=ids.clone())
+    assert "route" in Global_data.stage1["last"] and Global_data.stage1["last"]["route"] > 0
+    out.loss.backward()
+    assert all(p.grad is not None and p.grad.abs().sum() > 0 for p in bias)
+    assert all(p.grad is not None for p in groups["lora_kv"])
+
+
+def test_level_scalar_bias_gets_no_routing_gradient(cfg):
+    """With u = 0 and only the routing loss, the last layer's per-level scalar b gets zero
+    gradient (a constant inside each level's softmax); its u does not."""
+    model, apply_summary_bias = _flex_model(cfg, layers=2)
+    apply_lora(model, "gist", r=4)
+    apply_summary_bias(model)
+    Global_data.stage1 = {"pairs": [("hier", "g1")], "down": "hier", "lambda_ntp": 0.0,
+                          "route_rows": 16, "weights": {"route": 1.0, "hier|g1": 0.0}}
+    ids = _ids(300)
+    model(input_ids=ids, attention_mask=torch.ones_like(ids), labels=ids.clone()).loss.backward()
+    sb = model.model.layers[-1].self_attn.summary_bias
+    assert sb.b.grad.abs().max() < 1e-6 and sb.u.grad.abs().sum() > 0
+
+
+def test_freezing_level0_adapters(cfg):
+    model, _ = _flex_model(cfg)
+    groups = apply_lora(model, "gist", r=4, per_level=True)
+    for p in groups["level0"]:
+        p.requires_grad_(False)
+    _randomize_lora(model)
+    Global_data.stage1 = {"pairs": [("hier", "g1")], "down": "hier", "lambda_ntp": 0.0}
+    ids = _ids(200)
+    model(input_ids=ids, attention_mask=torch.ones_like(ids), labels=ids.clone()).loss.backward()
+    assert all(p.grad is None for p in groups["level0"])
+    assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in groups["level1"])

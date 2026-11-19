@@ -89,6 +89,7 @@ def prepare_gist_flex(
             for n in names - {"hier"}}
         pos = torch.arange(T, device=input_ids.device)[None]
         out["gist_loss_rows"] = (f.level < 0) & ~f.is_pad & (pos >= f.sink_end[:, None])
+        out["gist_input_ids"] = input_ids
     return out
 
 
@@ -115,14 +116,27 @@ def gist_flex_attention_forward(
         raise NotImplementedError(f"{GIST_FLEX} attention does not support sliding windows")
 
     B, H_kv, T, d = key.shape
+    key_orig = key
     idx = gist_kv_perm[:, None, :, None].expand(B, H_kv, T, d)
     key = key.gather(2, idx)
     value = value.gather(2, idx)
+
+    # Per-summary mass bias beta (gist_lora.SummaryBias), added to the summary columns.
+    beta = score_mod = None
+    sb = getattr(module, "summary_bias", None)
+    if sb is not None and getattr(module, "_bias_x", None) is not None:
+        beta = sb(module._bias_x, Global_data.lora_row_level)           # [B, H_kv, T]
+        beta_p = beta.gather(2, gist_kv_perm[:, None, :].expand(B, H_kv, T))
+        hpg = query.shape[1] // H_kv
+
+        def score_mod(score, b, h, q_idx, kv_idx):
+            return score + beta_p[b, h // hpg, kv_idx]
 
     def attend(block_mask):
         out = _flex(query.device)(
             query, key, value,
             block_mask=block_mask,
+            score_mod=score_mod,
             scale=scaling,
             enable_gqa=query.shape[1] != H_kv,
             kernel_options=_kernel_options(),
@@ -132,8 +146,27 @@ def gist_flex_attention_forward(
     st = Global_data.stage1
     if st is None:
         return attend(gist_block_mask), None
-    return _stage1_attention(module, attend, gist_block_mask, kwargs["gist_teacher_masks"],
-                             kwargs["gist_loss_rows"], st), None
+    out = _stage1_attention(module, attend, gist_block_mask, kwargs["gist_teacher_masks"],
+                            kwargs["gist_loss_rows"], st)
+    if st.get("route_rows", 0) > 0 and module.layer_idx > 0:
+        _stage1_routing(module, query, key_orig, beta, kwargs["gist_input_ids"],
+                        kwargs["gist_loss_rows"], scaling, st)
+    return out, None
+
+
+def _stage1_routing(module, query, key, beta, input_ids, rows, scaling, st):
+    """Routing KL on st["route_rows"] random loss rows per sequence (layer 0 excluded)."""
+    from gist_qwen2 import repeat_kv
+    from gist_routing import routing_kl
+
+    hpg = query.shape[1] // key.shape[1]
+    k = repeat_kv(key, hpg)
+    for b in range(query.shape[0]):
+        cand = torch.nonzero(rows[b]).flatten()
+        pick = cand[torch.randperm(cand.numel(), device=cand.device)[:st["route_rows"]]].sort().values
+        bt = None if beta is None else beta[b].repeat_interleave(hpg, 0)
+        st["losses"].setdefault("route", []).append(routing_kl(
+            query[b][:, pick], pick, k[b], input_ids[b], Global_data.gist_token_id, scaling, bt))
 
 
 def _rel_mse(student: torch.Tensor, teacher: torch.Tensor, rows: torch.Tensor) -> torch.Tensor:
