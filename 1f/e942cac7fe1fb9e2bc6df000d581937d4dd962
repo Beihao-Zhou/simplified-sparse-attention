@@ -1,0 +1,30 @@
+benchmark/Longbench_exp/longbench_pred.py
+  s_466735a13fa48a::t_7a33ca7398046d 373-381
+attn_candidate.py
+  s_466735a13fa48a::t_e0663452abd710 1173-1176
+tests/test_gist_opsd.py
+  s_466735a13fa48a::t_15f047f4d5b365 1-87
+experiments/opsd_mechanism.py
+  s_466735a13fa48a::t_def0188f0d1aa3 1-147
+gist_opsd.py
+  s_466735a13fa48a::t_d3f2496a5c3a91 1-129,131,133-197
+  s_466735a13fa48a::t_8934e7a58061d9 130,132
+gist_utils.py
+  s_466735a13fa48a::t_0c3258a33d001a 40-41
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "1fe942cac7fe1fb9e2bc6df000d581937d4dd962",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
