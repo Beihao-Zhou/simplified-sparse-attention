@@ -8,7 +8,7 @@ Nov 19, 2026 · @Someone（Nov 19 更新：设计决定、spike 计划、代码�
 
 - **阶段一（compression）**：插入 gist 与 meta-gist，用 gist causal mask 挡住原始 token；在同一次前向里，每层用同一组 q/k/v 计算多个 mask 下的 attention，按「老师链」逐级做相对 MSE。
 - **阶段二（indexing）**：学生用自己的 gist 打分做逐级 top-k 展开并生成；老师是原模型、读完整 KV；学生按记录的选择 replay，loss = 生成 token 上的反向 KL + 每一级的路由 KL（标签是真实 attention mass）。
-- **起点**：Qwen2.5-0.5B-Instruct 跑通全流程，再迁移到 7B。正式的 milestone 之前，先用四个 spike 验证位置规则、路由上限、树的阶段一和 OPSD 机制（见「Spikes」）。
+- **起点**：Qwen2.5-0.5B-Instruct 跑通全流程，再迁移到 7B。正式的 milestone 之前，先用四个 spike 验证噪声底、路由上限、树的阶段一和 OPSD 机制（见「Spikes」）。
 
 **给 agent 的使用方式**：先按「Spikes」执行，再按「Milestones」逐项执行；每完成一项先跑「Invariants」里的检查再继续。所有新功能都用开关控制，默认值等于原版 SSA。「Design decisions」里已定的事项不要重新讨论；遇到没有覆盖的未定项，停下来问人，不要自行假设。
 
@@ -35,12 +35,12 @@ Nov 19, 2026 · @Someone（Nov 19 更新：设计决定、spike 计划、代码�
 
 下列事项已经决定，理由写在每条后面；推翻任何一条需要先有 spike 或实验数据。
 
-**原始 token 保持原来的位置。** 现在的代码让 gist 也占位置（`generation_utils.py:104`，`position_ids = attention_mask.cumsum - 1`），原始 token 被往后挤：chunk4-chunk4 下每 16 个原始 token 多 5 个 summary，位置被拉长约 31%，32K 的原文排到约 42K。老师读的是不插 gist 的原始序列，位置一旦不同，全部展开时 KL 也不为 0，OPSD 的信号里会混进一项消不掉的噪声。因此原始 token 用原序列的位置，gist 与 meta-gist 取它所在 chunk 最后一个原始 token 的位置（`x1 x2 g1` → `0 1 1`）。即使 spike 显示旧规则在短上下文下也接近 0，仍用新规则，因为旧规则的拉长随长度增长，而新规则让「全部展开 = 原模型」严格成立。代价：与已放出的 checkpoint 不兼容，7B 上的原版 SSA 对照要按新规则重训。
+**原始 token 保持原来的位置（SSA 已经这样做）。** gist 与 meta-gist 取它前面最后一个原始 token 的位置（`x1 x2 g1` → `0 1 1`）：模型 forward 里 RoPE 位置减去了截至当前的 summary 个数（`gist_qwen2.py`、`gist_llama.py` 中的 `rope_pos = pos - cumsum(gist_mask)`），decode 时每个生成 token 取上一个位置加一。`generation_utils.py` 里按 attention mask 累加的 position id 会被这一步修正，不代表真实的 RoPE 位置。这条规则让「全部展开 = 原模型」严格成立：S1 在 Qwen2.5-0.5B-Instruct 上测得替换式全部展开的平均反向 KL 约 1e-9（8K 上下文，最大 6e-7）；作为对照，若原始 token 按插入后的下标取位置（chunk4-chunk4 下拉长约 31%），平均反向 KL 约 0.19 nats/token。已放出的 checkpoint 按同一规则训练，7B 上的原版 SSA 对照可以直接用。`tests/test_gist_noise_floor.py` 守住这条规则。
 
 **只训练 gist 专属的参数（下称方案 D），全局 LoRA（方案 B）作对照。** 每层的 q/k/v/o 投影在 gist / meta-gist 行上换成 W<sup>g</sup> = W + BA（gist 专属 LoRA，B 初始为 0），原始 token 走原权重 W，MLP 先共用。这样选有三个原因：
 
 1. 局部老师 `o_raw` 是用学生自己的 q/k/v 算的，如果训练会改原始 token 的 q/k，模型可以让 query 不看远处，使 `o_raw ≈ o_g1`，MSE 下降而 gist 什么都没学会；纯 MSE 时没有任何 loss 阻止这个退化解。方案 D 冻结了原始 token 的投影，排除了这个解。
-2. 全部展开时原始 token 的计算与原模型逐位相同，配合上一条的位置规则，噪声底严格为 0，有偏差就是 bug。
+2. 全部展开时原始 token 的计算与原模型逐位相同，配合 SSA 的位置规则，噪声底严格为 0，有偏差就是 bug。
 3. 关掉 gist 专属参数就是原模型，OPSD 的老师不用另存一份权重。
 
 方案 D 的风险在读的一侧：原模型的 q 必须能读懂学出来的 gist KV。缓解办法依次是每个 summary 的偏置 β、提高 LoRA 的秩、给 gist 加 MLP 专属参数、只在 query 读 summary 时生效的小 LoRA。
@@ -124,10 +124,10 @@ x1 x2 g1 x3 x4 g2 G1 | x5 x6 g3 x7 x8 g4 G2 | suffix ...
 
 | 文件 | 已有内容 | 我们要做的 |
 | --- | --- | --- |
-| `src/data/gist.py`、`src/data/gist_flex_mask.py`、`src/data/gist_stream.py` | 插入 gist / meta-gist，dense 与 flex 的 gist mask | 老师 mask（纯 causal、单层 gist）的 `mask_mod`；新的位置规则 |
+| `src/data/gist.py`、`src/data/gist_flex_mask.py`、`src/data/gist_stream.py` | 插入 gist / meta-gist，dense 与 flex 的 gist mask | 老师 mask（纯 causal、单层 gist）的 `mask_mod` |
 | `gist_qwen2.py`（`eager_attention_forward_prefill` / `_decoding` / `_prefill_chunk`） | 逐级打分与 `top_k_from_logits`、`level_meta`、adaptive top-k | gist 专属投影；训练路径内多 mask 的 attention 与逐层 MSE；路由 KL；选择的记录与强制 replay；可选 Gumbel |
 | `GistQwen2ForCausalLM.forward` | 训练的 `selective` 分支；多 mask 的 5D 分支与 `--klloss` 逐层对齐（`masked_smoothl1_vocab`）；`masked_kl_vocab`（未被调用） | 把逐层 loss 汇总进总 loss；接受 replay 的选择 |
-| `generation_utils.py`、`gist_caching.py` | 带 gist 的生成与 KV cache；position id 在 `generation_utils.py:104` | 新位置规则；rollout 时导出每步每层每组的选择 |
+| `generation_utils.py`、`gist_caching.py` | 带 gist 的生成与 KV cache；position id 在 `generation_utils.py:104` | rollout 时导出每步每层每组的选择 |
 | `gist_trainer_long.py`、`gist_training.py`、`gist_cpt_trainer.py`、`gist_sft_trainer.py` | 原版两阶段训练与共用 setup；`--train_attn flex` | 作为模板；阶段一加 gist 专属参数、冻结原模型、NTP 开关 |
 | 新文件 `gist_opsd_trainer.py` | — | rollout → 老师 → replay → 两个 loss → 更新 |
 | `kernels/`、`attn_candidate.py` | CUDA 稀疏 decode kernel 与调度；`DUMP_DECODE` 只导出第 1 层一次 | 不改 kernel；`ATTN_IMPL=ref` 作为参考路径做对齐 |
@@ -136,23 +136,23 @@ x1 x2 g1 x3 x4 g2 G1 | x5 x6 g3 x7 x8 g4 G2 | suffix ...
 
 **仓库组织**：remote 里你的 fork 是 `Beihao-Zhou/simplified-sparse-attention`，原作者的仓库是 `yuzhenmao/simplified-sparse-attention`；只往 fork 推送、开 issue。issue 跟踪见 `docs/agents/issue-tracker.md`。spike 共用 `opsd/spikes`；之后的 milestone 每个功能一个分支（`stage1-layerwise-mse`、`routing-kl`、`stage2-record-replay`、`stage2-opsd`、`explore-gumbel`），一个功能一个 PR。
 
-**开关**（默认值 = 原版 SSA）：`trainable` ∈ {`full`（默认）, `gist_lora`（方案 D）, `gist_kv`（D-kv）, `gist_full`（全秩方案 D）, `lora`（方案 B）}、`lora_r`（32）、`gist_lora_per_level`（默认关）、`freeze_lower_levels`、`gist_mlp`、`position_rule` ∈ {`shift`（默认）, `raw`}、`layerwise_mse`、`lambda_ntp`、`lambda_route`、`summary_bias` ∈ {`none`（默认）, `level`, `content`}、`record_selection`、`replay_selection`、`gumbel_tau`（0 = 关）、`share_selection_across_layers`。
+**开关**（默认值 = 原版 SSA）：`trainable` ∈ {`full`（默认）, `gist_lora`（方案 D）, `gist_kv`（D-kv）, `gist_full`（全秩方案 D）, `lora`（方案 B）}、`lora_r`（32）、`gist_lora_per_level`（默认关）、`freeze_lower_levels`、`gist_mlp`、`layerwise_mse`、`lambda_ntp`、`lambda_route`、`summary_bias` ∈ {`none`（默认）, `level`, `content`}、`record_selection`、`replay_selection`、`gumbel_tau`（0 = 关）、`share_selection_across_layers`。
 
 ## Spikes
 
 正式训练之前，用四个小规模试验回答「答案为否就要改计划」的问题。spike 只看趋势和量级：每个配置 1 个种子，主指标是后缀 logit KL（held-out 长文本，后缀上学生对比 full attention 原模型的平均 token KL，单位 nats）和逐级路由召回；LongBench 与 RAG 留到 milestone。每个 spike 在 fork 上开一个 issue，结果与 commit 贴在 issue 里，数字写进 `results/spikes.csv`。硬件：L4（24 GB）现在可用，H100 几天内到；阶段一的试验赶上 H100 就放到 H100 上跑。
 
-**位置规则对噪声底有多大影响？** Qwen2.5-0.5B-Instruct 插入未训练的 gist、全部展开（原始 token 看不到 gist），在旧规则与新规则下分别测与原模型在原始序列上的 KL。成本：几分钟，本机即可。新规则 < 1e-3 为通过；新规则 > 1e-2 说明 mask 或位置映射有 bug，先修。无论旧规则结果如何，采用新规则（见「Design decisions」）。
+**全部展开时噪声底是不是 0？**（已完成，通过）Qwen2.5-0.5B-Instruct 插入未训练的 gist、全部展开，与原模型在原始序列上比较。替换式（原始 token 看不到 summary）平均反向 KL 约 1e-9，最大 6e-7，远低于 1e-3 的阈值；SG+SR 式（所有未训练的 summary 都可见）平均 3–5 nats，说明未训练的 summary 一旦可见会严重干扰输出；位置拉长的对照约 0.19 nats。结果在 `results/spikes.csv`。
 
-**现有两层树的路由离 oracle 有多远？** 用 `GSA-FT-Qwen2-7B-Instruct-chunk4-chunk4`（旧位置规则，L4 已缓存）在 triviaqa、hotpotqa、narrativeqa、2wikimqa 各约 15 条上记录逐级打分与 oracle mass（每条前 32 步 decode，第 2、8、16、24 层），按上下文 < 8K、8–16K、> 16K 分桶，交给 `experiments/deep_routing.py` 算逐级召回、mass 召回与答案 chunk 命中，并模拟更深的树。需要先写记录脚本，输出 `s0/s1/m0/parent0/k0` 格式。成本：L4 上 1–3 小时。每级 mass 召回在所有桶 ≥ 95% 时，路由 KL 降为次要；长桶 < 85% 时，路由 KL 和长上下文是重点。
+**现有两层树的路由离 oracle 有多远？** 用 `GSA-FT-Qwen2-7B-Instruct-chunk4-chunk4`（L4 已缓存）在 triviaqa、hotpotqa、narrativeqa、2wikimqa 各约 15 条上记录逐级打分与 oracle mass（每条前 32 步 decode，第 2、8、16、24 层），按上下文 < 8K、8–16K、> 16K 分桶，交给 `experiments/deep_routing.py` 算逐级召回、mass 召回与答案 chunk 命中，并模拟更深的树。需要先写记录脚本，输出 `s0/s1/m0/parent0/k0` 格式。成本：L4 上 1–3 小时。每级 mass 召回在所有桶 ≥ 95% 时，路由 KL 降为次要；长桶 < 85% 时，路由 KL 和长上下文是重点。
 
-**OPSD 的机制是否写对？** 在未训练的 gist 上，按新位置规则跑 rollout（ref 路径）→ 原始序列上的老师 → 按记录的选择 replay。成本：几分钟，插在阶段一试验之间跑。replay 与 rollout 的生成 token log 概率最大绝对差 < 1e-3（fp32）、全部展开时 KL < 1e-3 为通过；任一不过都是 bug，修复而不是调参。
+**OPSD 的机制是否写对？** 在未训练的 gist 上跑 rollout（ref 路径）→ 原始序列上的老师 → 按记录的选择 replay。成本：几分钟，插在阶段一试验之间跑。replay 与 rollout 的生成 token log 概率最大绝对差 < 1e-3（fp32）、全部展开时 KL < 1e-3 为通过；任一不过都是 bug，修复而不是调参。
 
 **两层树的阶段一能不能学？** 0.5B、chunk4-chunk4、8K 训练、约 500 步（8 × 8K），8K 与 16K 两个长度评测，三个配置：方案 D 两级同时训（两级共用 gist LoRA）、方案 D 分阶段训（每级一套 gist LoRA，第二阶段冻结第一级）、方案 B 两级同时训，LoRA 都取 r = 32，都开路由 KL（小 λ\_r）和内容相关的 β，并记录各参数组的逐层梯度范数。成本：每个配置 L4 上 2–6 小时，H100 上不到 1 小时。通过条件：两级 MSE 都下降，不展开时的后缀 KL 比第 0 步下降 ≥ 30%，方案 D 的后缀 KL 不超过方案 B 的 1.2 倍。方案 D 超过 1.2 倍说明容量不够，依次试更大的 r、`gist_mlp`、读侧 LoRA；方案 B 逐层 MSE 更低而后缀 KL 更高，说明出现了退化解；两级 MSE 都不降，停下来重新考虑阶段一。
 
 **OPSD 的训练信号是否有效？** 接着上一项的方案 D 模型，4K 上下文、生成 128 个 token、batch 8、约 300 步。成本：L4 上 3–12 小时（受 ref decode 的开销限制，H100 只快约 2 倍）。生成 token 的平均反向 KL 下降 ≥ 20%、每步展开数变化 < 5% 为通过；KL 不动说明信号太弱，展开数上升说明预算有泄漏。
 
-执行顺序：位置规则 → 路由上限 → OPSD 机制 → 阶段一 → OPSD 训练信号。落在阈值附近的结论，先补种子再下结论。
+执行顺序：噪声底 → 路由上限 → OPSD 机制 → 阶段一 → OPSD 训练信号。落在阈值附近的结论，先补种子再下结论。
 
 ## Milestones
 
@@ -160,7 +160,7 @@ spike 全部通过后按顺序执行；每一项的验收标准满足后才进�
 
 - [ ] **M0 基线与流程验证**
 
-  环境：L4 上 `~/ssa_venv`（torch 2.6、transformers 4.57.1），跑 CPU 测试、`check_correctness.sh`、`tests/gpu_validate_flex.py`。用 `gsa-ft-qwen2-chunk4-chunk4`（7B）在 LongBench 小子集与 RAG（NQ）上验证评测流程（与论文误差在 1 分以内），`ATTN_IMPL=ref` 与 CUDA 路径一致。0.5B 上拿到 full attention 的分数，并按原版配置（全量、NTP、旧位置规则）训一个 chunk4-chunk4 的原版 SSA 作为主对照。
+  环境：L4 上 `~/ssa_venv`（torch 2.6、transformers 4.57.1），跑 CPU 测试、`check_correctness.sh`、`tests/gpu_validate_flex.py`。用 `gsa-ft-qwen2-chunk4-chunk4`（7B）在 LongBench 小子集与 RAG（NQ）上验证评测流程（与论文误差在 1 分以内），`ATTN_IMPL=ref` 与 CUDA 路径一致。0.5B 上拿到 full attention 的分数，并按原版配置（全量、NTP）训一个 chunk4-chunk4 的原版 SSA 作为主对照。
 - [ ] **M1 阶段一：逐层 MSE（单层 gist）**
 
   实现 `o_raw` 与 `o_g1` 的逐层 relMSE、方案 D（gist 专属 LoRA）、冻结原模型、NTP 开关；D-kv 与全秩方案 D 的对照在这里做。验收：所有开关取默认值时与原版 CPT 的 loss 曲线一致；开启后逐层 MSE 稳定下降；单层 SSA 推理（不展开）质量不低于原版 CPT；NTP 对 MSE 的对照在这里做。
@@ -192,7 +192,7 @@ spike 全部通过后按顺序执行；每一项的验收标准满足后才进�
 | 对照 | 说明 |
 | --- | --- |
 | Full attention（原模型） | 质量上限，也是 OPSD 的老师 |
-| 原版 SSA / H-SSA | CPT（NTP）+ selective FT（NTP），全量微调；0.5B 自己训，7B 按新位置规则重训（旧规则的放出 checkpoint 只用于流程验证和路由分析） |
+| 原版 SSA / H-SSA | CPT（NTP）+ selective FT（NTP），全量微调；0.5B 自己训，7B 用放出的 checkpoint |
 | Mean pooling 块路由（HISA / MoBA 式） | 同预算下用块内 key 平均做代表向量，直接对应我们的 motivation |
 | Full-PT | 与 SSA 论文一致的「继续预训练但不压缩」参照 |
 
@@ -209,7 +209,6 @@ spike 全部通过后按顺序执行；每一项的验收标准满足后才进�
 | 可训练参数 | 全量（原版）/ 方案 D（gist 专属 LoRA）/ D-kv（只 K、V）/ 全秩方案 D（0.5B）/ 方案 D + gist MLP / 方案 D + 读侧 LoRA / 方案 B（同秩全局 LoRA q/k/v/o）/ 全局 LoRA 只 v/o；LoRA 秩 r |
 | summary 偏置 | 无 / 每级标量 b（初值 log n）/ 内容相关的 β（默认） |
 | 路由拓扑 | 逐级自顶向下（默认）/ 跨级 best-first tree cut（离线） |
-| 位置规则 | 原始 token 保持原位置（默认）/ gist 占位置（原版） |
 | 选择 | 确定性 top-k / Gumbel 探索；per-head 并集 / 组级；各层独立 / 相邻层共享；逐级 k 相同 / 上宽下窄 |
 | 压缩比 | 8× / 16× / 32×（L、J 组合） |
 
@@ -229,7 +228,7 @@ spike 全部通过后按顺序执行；每一项的验收标准满足后才进�
 1. **开关取默认值 = 原版 SSA**：loss、logits 与基准 commit `e3a9d26` 一致（同种子、同数据）；1–2 层的 mask 另与原仓库 `c47ca56` 对照一次。
 2. **参考路径一致**：新逻辑先在 `ATTN_IMPL=ref` 的 eager 路径实现并测试，再对齐 CUDA / FlexAttention 路径；两者输出在数值误差内。
 3. **replay 一致**：用 rollout 记录的选择 replay，得到的生成 token log 概率与 rollout 时记录的一致（fp32 下最大绝对差 < 1e-3）。
-4. **噪声底为 0**：方案 D + 新位置规则下，学生展开全部 chunk 时原始 token 的计算与原模型相同，与老师在生成 token 上的 KL 在数值误差内为 0；不为 0 就是位置映射、mask 或精度的 bug。这里的「全部展开」指每个 chunk 都用原始 KV 代替 summary、被展开的 summary 不再可见；SSA 的 SG+SR 让被选中的 summary 与其原始 KV 同时可见，那样的全部展开会多出 summary key，噪声底不为 0，需要单独测量（见「Open questions」）。
+4. **噪声底为 0**：方案 D 下，学生展开全部 chunk 时原始 token 的计算与原模型相同，与老师在生成 token 上的 KL 在数值误差内为 0；不为 0 就是位置映射、mask 或精度的 bug。这里的「全部展开」指每个 chunk 都用原始 KV 代替 summary、被展开的 summary 不再可见；SSA 的 SG+SR 让被选中的 summary 与其原始 KV 同时可见，那样的全部展开会多出 summary key，噪声底不为 0，需要单独测量（见「Open questions」）。
 5. **梯度覆盖**：开启路由 KL 后，没被选中的 summary 的 key 和 β 梯度非零；老师分支（`o_raw`、`o_g1` 作为目标时、OPSD 的老师）没有梯度；方案 D 下原始 token 的投影权重没有梯度。
 6. **预算不漂移**：每步实际展开的 chunk 数由 adaptive top-k 决定，训练前后分布一致。
 
@@ -248,9 +247,9 @@ spike 全部通过后按顺序执行；每一项的验收标准满足后才进�
 
 ## Open questions and risks
 
-原来的待确认问题都已解决：位置规则见「Design decisions」；阶段一的「逐层」就是本文的设计（同一组 q/k/v、多 mask、梯度跨层连通），老师用带 gist 的序列；没有比公开版更新的内部分支；`masked_kl_vocab` 未被调用，`--klloss` 的逐层对齐默认关闭；起步模型 Qwen2.5-0.5B-Instruct，H100 几天内到；训练数据沿用 SSA，agent 数据需要时自己找。新的未定项出现时，停下来问人。
+原来的待确认问题都已解决：位置规则已由 SSA 的 RoPE 修正实现（见「Design decisions」）；阶段一的「逐层」就是本文的设计（同一组 q/k/v、多 mask、梯度跨层连通），老师用带 gist 的序列；没有比公开版更新的内部分支；`masked_kl_vocab` 未被调用，`--klloss` 的逐层对齐默认关闭；起步模型 Qwen2.5-0.5B-Instruct，H100 几天内到；训练数据沿用 SSA，agent 数据需要时自己找。新的未定项出现时，停下来问人。
 
-**待定：展开后 summary 是否仍可见。** SSA 的 SG+SR 让被选中的 summary 和它的原始 KV 同时可见；替换式展开则只保留原始 KV。前者是原版推理的行为，后者才让噪声底严格为 0。OPSD 机制的 spike 两种都测，用两者的 KL 差与质量差决定阶段二用哪一种。
+**待定：展开后 summary 是否仍可见。** SSA 的 SG+SR 让被选中的 summary 和它的原始 KV 同时可见；替换式展开则只保留原始 KV。前者是原版推理的行为，后者才让噪声底严格为 0。S1 的数据：未训练时让所有 summary 都可见，平均反向 KL 为 3–5 nats，而替换式约 1e-9；训练后 SG+SR 的代价需要重新测。OPSD 机制的 spike 两种都测，用两者的 KL 差与质量差决定阶段二用哪一种。
 
 **风险**
 
