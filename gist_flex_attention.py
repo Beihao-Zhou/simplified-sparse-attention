@@ -31,19 +31,26 @@ GIST_FLEX = "gist_flex"
 # Compiled flex_attention backpropagates into score_mod-captured tensors from torch 2.7.
 _CAPTURED_GRAD = tuple(int(x) for x in torch.__version__.split(".")[:2]) >= (2, 7)
 
-_compiled_flex = None
+_compiled_flex = {}
 
 
 def _flex(device: torch.device):
-    """flex_attention, compiled for CUDA tensors and eager otherwise (e.g. CPU tests)."""
-    global _compiled_flex
+    """flex_attention, compiled for CUDA tensors and eager otherwise (e.g. CPU tests).
+
+    Separate compiled instances for grad and no-grad calls: once an instance holds
+    no-grad graphs for other lengths (evaluation), the backward through a
+    score_mod-captured tensor (beta) fails to compile in torch 2.8.
+    """
     if device.type != "cuda" or os.environ.get("GIST_FLEX_COMPILE", "1") != "1":
         return flex_attention
-    if _compiled_flex is None:
-        # Not dynamic=False: that recompiles per length and, past the recompile limit,
-        # falls back to eager, which materializes [B, H, T, T] scores.
-        _compiled_flex = torch.compile(flex_attention)
-    return _compiled_flex
+    key = torch.is_grad_enabled()
+    if key not in _compiled_flex:
+        # Not dynamic=False by default: that recompiles per length and, past the recompile
+        # limit, falls back to eager, which materializes [B, H, T, T] scores.
+        # GIST_FLEX_DYNAMIC=0 compiles static shapes, for a few fixed lengths.
+        dynamic = None if os.environ.get("GIST_FLEX_DYNAMIC", "") != "0" else False
+        _compiled_flex[key] = torch.compile(flex_attention, dynamic=dynamic)
+    return _compiled_flex[key]
 
 
 @functools.lru_cache(maxsize=None)

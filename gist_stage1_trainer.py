@@ -59,6 +59,9 @@ def parse_args(argv=None):
     ap.add_argument("--eval_rows", type=int, default=16)
     ap.add_argument("--eval_len", type=int, nargs="+", default=[8192])
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--eval_only", default=None,
+                    help="adapters.pt to evaluate (all --eval_len) instead of training; a fresh "
+                         "process per run keeps long-eval graphs apart from training graphs")
     ap.add_argument("--sink", type=int, default=3)
     return ap.parse_args(argv)
 
@@ -171,6 +174,13 @@ def main(argv=None):
     setup_globals(tok, gist_ids, args)
     groups = apply_lora(model, args.lora, r=args.r, per_level=args.per_level)
     groups["beta"] = apply_summary_bias(model) if args.beta else []
+    if args.eval_only:
+        ck = torch.load(args.eval_only, map_location="cpu")
+        state = {k: v for k, v in ck["state"].items() if k != "gist_embed"}
+        missing, unexpected = model.load_state_dict(state, strict=False)
+        assert not unexpected, unexpected
+        with torch.no_grad():
+            model.get_input_embeddings().weight[gist_ids] = ck["state"]["gist_embed"].cuda()
     model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     model.config.use_cache = False
     model.train()
@@ -200,6 +210,12 @@ def main(argv=None):
         print(json.dumps(rec), flush=True)
         log.write(json.dumps(rec) + "\n"); log.flush()
 
+    if args.eval_only:
+        Global_data.stage1 = stage1_config(args, args.phase2_pairs if args.phase2_at else None,
+                                           args.phase2_down if args.phase2_at else None)
+        log = open(os.path.join(args.out, "eval.jsonl"), "a")
+        evaluate("final")
+        return
     evaluate(0)
     for step in range(1, args.steps + 1):
         if args.phase2_at and step == args.phase2_at:
