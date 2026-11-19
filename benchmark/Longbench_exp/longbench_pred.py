@@ -458,6 +458,9 @@ if __name__ == "__main__":
     family = AutoConfig.from_pretrained(model_path).model_type
     # define your model
     max_length = model2maxlen[model_name]
+    # MAX_LENGTH caps the prompt (middle truncation) below the model's limit, e.g. to fit
+    # the dense prefill mask of a 7B model on a 24 GB GPU.
+    max_length = min(max_length, int(os.environ.get("MAX_LENGTH", max_length)))
     model, tokenizer = load_model_and_tokenizer(model_path, family, device, args)
 
     datasets = args.datasets

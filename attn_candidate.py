@@ -947,7 +947,11 @@ def _prefill_forward(module, query, key, value, attention_mask, scaling, dropout
         perm = pc.perm
         kP = key_states[:, :, perm, :]
         vP = value_states[:, :, perm, :]
-        out_full = flex(query, kP, vP, block_mask=pc.block_mask, scale=scaling)
+        # GIST_FLEX_KERNEL_OPTIONS lowers Triton tiles on GPUs with less shared memory than
+        # an H100 (an L4's 101 KB is not enough for the defaults), as in training.
+        from gist_flex_attention import _kernel_options
+        out_full = flex(query, kP, vP, block_mask=pc.block_mask, scale=scaling,
+                        kernel_options=_kernel_options())
         out[:] = out_full.transpose(1, 2).contiguous()
     else:
         out_full = F.scaled_dot_product_attention(
