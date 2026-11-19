@@ -17,3 +17,13 @@ S1,sgsr_L8192,0,mean_rkl,4.982e+00,d5c8705,2026-11-19
 S1,sgsr_L8192,0,max_rkl,2.547e+01,d5c8705,2026-11-19
 S1,shift_L8192,0,mean_rkl,1.856e-01,d5c8705,2026-11-19
 S1,shift_L8192,0,max_rkl,2.316e+01,d5c8705,2026-11-19
+S4a,ctx2048_new64_n8,0,replay_max_abs_lp,5.341e-05,72ef063,2026-11-19
+S4a,ctx2048_new64_n8,0,replay_max_abs_all,2.689e-04,72ef063,2026-11-19
+S4a,ctx2048_new64_n8,0,floor_replace,9.773e-09,72ef063,2026-11-19
+S4a,ctx2048_new64_n8,0,floor_sgsr,1.886e+00,72ef063,2026-11-19
+S4a,ctx2048_new64_n8,0,rkl_sparse,8.943e-01,72ef063,2026-11-19
+S4a,ctx2048_new64_n8,0,keys_per_row,1.569e+02,72ef063,2026-11-19
+S4a,ctx2048_new64_n8,0,ms_per_token,1.125e+02,72ef063,2026-11-19
+S4a,grad_prompt0,0,rkl_grad_unselected_max,0.000e+00,72ef063,2026-11-19
+S4a,grad_prompt0,0,route_grad_unselected_frac,1.000e+00,72ef063,2026-11-19
+S4a,grad_prompt0,0,teacher_has_grad,0.000e+00,72ef063,2026-11-19
