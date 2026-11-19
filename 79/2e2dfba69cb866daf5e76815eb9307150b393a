@@ -1,0 +1,21 @@
+attn_candidate.py
+  s_466735a13fa48a::t_de02d299b3c8f5 950-954
+benchmark/Longbench_exp/longbench_pred.py
+  s_466735a13fa48a::t_22348562886098 461-463
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "792e2dfba69cb866daf5e76815eb9307150b393a",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
