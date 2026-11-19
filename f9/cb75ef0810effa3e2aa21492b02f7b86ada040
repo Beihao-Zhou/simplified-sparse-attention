@@ -1,0 +1,28 @@
+docs/agents/triage-labels.md
+  s_466735a13fa48a::t_d3a46bfc0661df 1-15
+docs/agents/issue-tracker.md
+  s_466735a13fa48a::t_d3a46bfc0661df 1-3,5-53
+  s_466735a13fa48a::t_4ebe0c42db0251 4
+docs/opsd-handoff.md
+  s_466735a13fa48a::t_0904672b7bdf57 219
+  s_466735a13fa48a::t_509594e97c6ffe 240
+  s_466735a13fa48a::t_d44dd30c065158 3,7,11,13,21,30-31,34-53,56,58,72-73,81-83,92-93,101,106,113,117-121,123,125,127-145,149,151,153,156,165,168,174,178,185,194-195,198-199,206,216,218,220,238,247-251,255,268
+docs/agents/domain.md
+  s_466735a13fa48a::t_d3a46bfc0661df 1-51
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "f9cb75ef0810effa3e2aa21492b02f7b86ada040",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "unknown"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
