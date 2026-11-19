@@ -125,6 +125,8 @@ def beta_stats(model):
     u, spread = [], []
     for layer in model.model.layers:
         attn = layer.self_attn
+        if getattr(attn, "summary_bias", None) is None:   # layer 0 has none
+            continue
         u.append(attn.summary_bias.u.norm(dim=(1, 2)))
         x, lv = getattr(attn, "_bias_x", None), Global_data.lora_row_level
         if x is not None and lv is not None and x.shape[:2] == lv.shape:
