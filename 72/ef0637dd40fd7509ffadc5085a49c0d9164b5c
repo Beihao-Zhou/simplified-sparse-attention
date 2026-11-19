@@ -1,0 +1,38 @@
+gist_lora.py
+  s_466735a13fa48a::t_4514e91ce6040b 64-68
+  s_466735a13fa48a::t_ff606905f13f8a 20-24,28-32,39-48,52-63,69-88,90-92,97-99,101-102,110,112-114
+gist_stage1_trainer.py
+  s_466735a13fa48a::t_3e6f43fd53baea 1-24,26-41,51,53-74,78-79,81-87,89-118,137-144,147-148,152-167,170-172,174,176-180,182,184-185,191-195,203-221,223-229
+  s_466735a13fa48a::t_49557edafe43bc 52,80,88,181,183
+  s_466735a13fa48a::t_197cb863577550 25,42-50,75-77,168-169,173,175,186-188,196-202
+  s_466735a13fa48a::t_4514e91ce6040b 145-146,149-151
+  s_466735a13fa48a::t_dd182e140ef7d7 119-136,189-190,222
+gist_flex_attention.py
+  s_466735a13fa48a::t_4514e91ce6040b 92,119,124-134,139,149-169
+gist_routing.py
+  s_466735a13fa48a::t_969d9b12ef5263 1-48
+gist_qwen2.py
+  s_466735a13fa48a::t_ff606905f13f8a 1238-1240,1397-1398
+gist_utils.py
+  s_466735a13fa48a::t_ff606905f13f8a 47-48
+tests/test_stage1.py
+  s_466735a13fa48a::t_6ff1820b0c057c 106-156
+gist_opsd.py
+  s_466735a13fa48a::t_0b69a5977515b4 26,161-164
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "72ef0637dd40fd7509ffadc5085a49c0d9164b5c",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
