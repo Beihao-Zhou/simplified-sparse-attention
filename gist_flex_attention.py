@@ -28,6 +28,9 @@ from src.data.gist_flex_mask import (
 
 GIST_FLEX = "gist_flex"
 
+# Compiled flex_attention backpropagates into score_mod-captured tensors from torch 2.7.
+_CAPTURED_GRAD = tuple(int(x) for x in torch.__version__.split(".")[:2]) >= (2, 7)
+
 _compiled_flex = None
 
 
@@ -121,20 +124,27 @@ def gist_flex_attention_forward(
     key = key.gather(2, idx)
     value = value.gather(2, idx)
 
-    # Per-summary mass bias beta (gist_lora.SummaryBias), added to the summary columns.
+    # Per-summary mass bias beta (gist_lora.SummaryBias) on the summary columns. torch >= 2.7
+    # backpropagates into a tensor captured by a score_mod; older versions cannot, so beta is
+    # folded into an extra q/k coordinate instead (head dim padded to a power of 2, whose
+    # backward does not fit an L4's shared memory at d = 64 -> 128).
     beta = score_mod = None
+    q_in, k_in = query, key
     sb = getattr(module, "summary_bias", None)
     if sb is not None and getattr(module, "_bias_x", None) is not None:
         beta = sb(module._bias_x, Global_data.lora_row_level)           # [B, H_kv, T]
         beta_p = beta.gather(2, gist_kv_perm[:, None, :].expand(B, H_kv, T))
-        hpg = query.shape[1] // H_kv
+        if _CAPTURED_GRAD:
+            hpg = query.shape[1] // H_kv
 
-        def score_mod(score, b, h, q_idx, kv_idx):
-            return score + beta_p[b, h // hpg, kv_idx]
+            def score_mod(score, b, h, q_idx, kv_idx):
+                return score + beta_p[b, h // hpg, kv_idx]
+        else:
+            q_in, k_in = fold_beta(query, key, beta_p, scaling)
 
     def attend(block_mask):
         out = _flex(query.device)(
-            query, key, value,
+            q_in, k_in, value,
             block_mask=block_mask,
             score_mod=score_mod,
             scale=scaling,
@@ -167,6 +177,19 @@ def _stage1_routing(module, query, key, beta, input_ids, rows, scaling, st):
         bt = None if beta is None else beta[b].repeat_interleave(hpg, 0)
         st["losses"].setdefault("route", []).append(routing_kl(
             query[b][:, pick], pick, k[b], input_ids[b], Global_data.gist_token_id, scaling, bt))
+
+
+def fold_beta(query: torch.Tensor, key: torch.Tensor, beta: torch.Tensor, scaling: float):
+    """Pad q/k to the next power-of-2 head dim (flex supports no other) with one coordinate
+    1 on q and beta/scaling on k, so scaling * q'.k' = scaling * q.k + beta.
+    query [B, H, T, d], key [B, H_kv, T, d], beta [B, H_kv, T] in key order."""
+    d = query.shape[-1]
+    E = 1 << d.bit_length()                                             # > d, power of 2
+    zq = query.new_zeros(*query.shape[:3], E - d - 1)
+    zk = key.new_zeros(*key.shape[:3], E - d - 1)
+    q = torch.cat([query, query.new_ones(*query.shape[:3], 1), zq], dim=-1)
+    k = torch.cat([key, (beta[..., None] / scaling).to(key.dtype), zk], dim=-1)
+    return q, k
 
 
 def _rel_mse(student: torch.Tensor, teacher: torch.Tensor, rows: torch.Tensor) -> torch.Tensor:

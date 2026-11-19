@@ -154,3 +154,17 @@ def test_freezing_level0_adapters(cfg):
     model(input_ids=ids, attention_mask=torch.ones_like(ids), labels=ids.clone()).loss.backward()
     assert all(p.grad is None for p in groups["level0"])
     assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in groups["level1"])
+
+
+def test_fold_beta_adds_bias_to_logits():
+    from gist_flex_attention import fold_beta
+    torch.manual_seed(0)
+    q, k = torch.randn(1, 4, 10, 16), torch.randn(1, 2, 10, 16)
+    beta = torch.randn(1, 2, 10)
+    s = 16 ** -0.5
+    q2, k2 = fold_beta(q, k, beta, s)
+    assert q2.shape[-1] == 32 and k2.shape[-1] == 32
+    kr = k.repeat_interleave(2, 1)
+    ref = (q @ kr.transpose(-1, -2)) * s + beta.repeat_interleave(2, 1)[:, :, None, :]
+    got = (q2 @ k2.repeat_interleave(2, 1).transpose(-1, -2)) * s
+    torch.testing.assert_close(got, ref, rtol=1e-5, atol=1e-5)
