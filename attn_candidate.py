@@ -1170,6 +1170,10 @@ def attn_dispatcher(
     #     gist_qwen2.eager_attention_forward_*.
     #   * Inference (eval)           -> sparse_attention_forward (flex/dense
     #     prefill + compact sparse decode). ATTN_IMPL=ref forces eager for debugging.
+    if getattr(Global_data, "opsd_replay", None) is not None and not decode:
+        # OPSD replay of generated rows with recorded selections (gist_opsd.py).
+        from gist_opsd import replay_attention
+        return replay_attention(module, query, key, value, scaling)
     force_ref = os.environ.get("ATTN_IMPL", "sparse") == "ref"
     if force_ref or module.training:
         return _call_ref(

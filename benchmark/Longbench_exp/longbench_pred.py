@@ -370,7 +370,15 @@ def get_pred(
 
         _set_attn_impl(candidate)
         torch.manual_seed(0)
-        output, prefill_ms, tpot_ms = _generate_one(model, gen_kwargs)
+        try:
+            output, prefill_ms, tpot_ms = _generate_one(model, gen_kwargs)
+        except torch.OutOfMemoryError:
+            if not os.environ.get("ROUTING_RECORD_DIR"):
+                raise
+            # Routing analysis keeps the samples that fit; the scores file stays aligned.
+            print(f"OOM at context length {context_length}; sample skipped")
+            torch.cuda.empty_cache()
+            continue
         _BENCH_RUNS["correctness"] = None
         _BENCH_RUNS["token_match"] = None
 

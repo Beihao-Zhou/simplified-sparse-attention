@@ -37,6 +37,8 @@ class Global_data:
     inference_mode = "default"
     sparse_budget = 64  # Per-query budget for sparse attention (max keys to attend to)
     last_pos = None
+    # OPSD replay state (gist_opsd.replay); None outside a replay forward.
+    opsd_replay = None
     sep_num = 0
     add_raw = False
     kl_loss = False
