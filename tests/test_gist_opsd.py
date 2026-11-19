@@ -85,3 +85,20 @@ def test_gradients(setup):
         seen = vis.view(-1, hpg, *vis.shape[1:]).any(1).any(1)
         g = key.grad[0].abs().sum(-1)
         assert g[~seen & is_sum].gt(0).float().mean() > 0.9, f"layer {layer}: routing KL misses unselected summaries"
+
+
+def test_beta_folded_into_qk_matches_explicit_bias(setup):
+    """Rollout folds beta into an extra q/k coordinate inside the eager paths; replay adds
+    it to the attention bias. With a nonzero beta they still agree, and beta matters."""
+    from gist_lora import apply_summary_bias
+
+    model, _, ctx = setup
+    y0, lp0, _ = gist_opsd.rollout(model, ctx, 6, VOCAB, torch.Generator().manual_seed(0))
+    apply_summary_bias(model)
+    torch.manual_seed(5)
+    for layer in model.model.layers[1:]:
+        layer.self_attn.summary_bias.u.data.normal_(0, 0.3)
+    y, lp_roll, steps = gist_opsd.rollout(model, ctx, 6, VOCAB, torch.Generator().manual_seed(0))
+    lp_rep, _ = gist_opsd.replay(model, ctx, y, steps, VOCAB)
+    torch.testing.assert_close(lp_rep, lp_roll, rtol=0, atol=1e-4)
+    assert (lp_roll[0] - lp0[0]).abs().max() > 1e-3

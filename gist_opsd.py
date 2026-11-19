@@ -156,12 +156,20 @@ def replay_attention(module, query, key, value, scaling):
     k = repeat_kv(key, module.num_key_value_groups)
     v = repeat_kv(value, module.num_key_value_groups)
     bias = torch.zeros(vis.shape, dtype=query.dtype, device=query.device).masked_fill(~vis, float("-inf"))
+    beta = None
+    if getattr(module, "summary_bias", None) is not None:
+        # beta of the prefix from the replayed prefill; generated (raw) tokens have none.
+        pre = module._beta_cache                                            # [1, H_kv, Tc]
+        beta = torch.cat([pre, pre.new_zeros(*pre.shape[:2], k.shape[2] - pre.shape[2])], dim=2)
+        beta = beta.repeat_interleave(module.num_key_value_groups, dim=1)  # [1, H, K]
+        bias = bias + beta[:, :, None, :].to(bias.dtype)
     out = F.scaled_dot_product_attention(query, k, v, attn_mask=bias, scale=scaling)
     if st["route_on"]:
         K = k.shape[2]
         q_pos = torch.arange(K - query.shape[2], K, device=query.device)
         st["route"].append(routing_kl(query[0], q_pos, k[0], st["ids"][:K],
-                                      Global_data.gist_token_id, scaling))
+                                      Global_data.gist_token_id, scaling,
+                                      None if beta is None else beta[0]))
     return out.transpose(1, 2).contiguous(), None
 
 

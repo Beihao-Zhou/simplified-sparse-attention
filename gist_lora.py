@@ -72,15 +72,25 @@ def _capture_input(module, args, kwargs):
     module._bias_x = kwargs.get("hidden_states", args[0] if args else None)
 
 
+def _capturing(module, fn):
+    def wrapped(*args, **kwargs):
+        _capture_input(module, args, kwargs)
+        return fn(*args, **kwargs)
+    return wrapped
+
+
 def apply_summary_bias(model, spans=(4, 16)) -> list:
-    """Attach a SummaryBias to every attention layer; returns its parameters."""
+    """Attach a SummaryBias to every attention layer but the first (layer 0 uses plain
+    attention at inference and takes no part in selection); returns its parameters."""
     params = []
     cfg = model.config
-    for layer in model.model.layers:
+    for layer in model.model.layers[1:]:
         attn = layer.self_attn
         attn.summary_bias = SummaryBias(cfg.hidden_size, cfg.num_key_value_heads, spans).to(
             attn.q_proj.weight.device)
         attn.register_forward_pre_hook(_capture_input, with_kwargs=True)
+        # Selective inference calls select_forward directly, bypassing the hook.
+        attn.select_forward = _capturing(attn, attn.select_forward)
         params += list(attn.summary_bias.parameters())
     return params
 
@@ -120,3 +130,29 @@ def apply_lora(model, mode: str, r: int = 32, per_level: bool = False) -> Dict[s
     emb.register_hook(lambda g: g * rows)
     groups["embed"].append(emb)
     return groups
+
+
+def augment_with_beta(module, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor,
+                      scaling: float):
+    """Fold beta into an extra q/k coordinate for the inference attention paths.
+
+    q' = [q, 1] and k' = [k, beta / scaling] give attention logits scaling * q.k + beta
+    and selection scores q.k + beta / scaling, which rank like the routing scores
+    scaling * q.k + beta. v gets a zero coordinate so every head dimension matches; drop
+    the last output coordinate. beta is cached per layer: computed for the whole prefix at
+    prefill, zero for each decoded (raw) token.
+    """
+    T = key.shape[2]
+    q_len = query.shape[2]
+    cache = getattr(module, "_beta_cache", None)
+    if q_len > 1 or cache is None:
+        x = getattr(module, "_bias_x", None)
+        beta = module.summary_bias(x, Global_data.lora_row_level)            # [B, H_kv, q_len]
+        cache = beta if T == q_len else torch.cat([cache, beta], dim=2)
+    else:
+        cache = torch.cat([cache, cache.new_zeros(*cache.shape[:2], T - cache.shape[2])], dim=2)
+    module._beta_cache = cache
+    q = torch.cat([query, query.new_ones(*query.shape[:3], 1)], dim=-1)
+    k = torch.cat([key, (cache[..., None] / scaling).to(key.dtype)], dim=-1)
+    v = torch.cat([value, value.new_zeros(*value.shape[:3], 1)], dim=-1)
+    return q, k, v

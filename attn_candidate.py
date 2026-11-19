@@ -1175,6 +1175,12 @@ def attn_dispatcher(
         from gist_opsd import replay_attention
         return replay_attention(module, query, key, value, scaling)
     force_ref = os.environ.get("ATTN_IMPL", "sparse") == "ref"
+    if getattr(module, "summary_bias", None) is not None and not module.training:
+        # Trained per-summary bias (gist_lora.SummaryBias), folded into q/k (ref path only).
+        from gist_lora import augment_with_beta
+        q, k, v = augment_with_beta(module, query, key, value, scaling)
+        out, w = _call_ref(module, q, k, v, attention_mask, scaling, dropout, decode, chunk_q, **kwargs)
+        return out[..., :-1].contiguous(), w
     if force_ref or module.training:
         return _call_ref(
             module, query, key, value, attention_mask,
