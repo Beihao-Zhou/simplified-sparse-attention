@@ -120,3 +120,16 @@ def test_beta_folded_into_qk_matches_explicit_bias(setup):
     lp_rep, _ = gist_opsd.replay(model, ctx, y, steps, VOCAB)
     torch.testing.assert_close(lp_rep, lp_roll, rtol=0, atol=1e-4)
     assert (lp_roll[0] - lp0[0]).abs().max() > 1e-3
+
+
+def test_forced_and_greedy_rollout(setup):
+    """Forced tokens (off-policy control) are fed as given and replay still matches;
+    greedy picks the argmax of each step's distribution."""
+    model, _, ctx = setup
+    forced = torch.tensor([5, 9, 2, 7, 3, 1])
+    y, lp_roll, steps = gist_opsd.rollout(model, ctx, 6, VOCAB, forced=forced)
+    assert torch.equal(y, forced)
+    lp_s, _ = gist_opsd.replay(model, ctx, y, steps, VOCAB)
+    torch.testing.assert_close(lp_s, lp_roll, rtol=0, atol=1e-4)
+    yg, lpg, _ = gist_opsd.rollout(model, ctx, 6, VOCAB, greedy=True)
+    assert torch.equal(yg, lpg.argmax(-1))

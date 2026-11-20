@@ -74,6 +74,18 @@ def main(argv=None):
     ap.add_argument("--lr", type=float, default=2e-5)
     ap.add_argument("--warmup", type=int, default=10)
     ap.add_argument("--lambda_route", type=float, default=0.1)
+    ap.add_argument(
+        "--rkl_weight",
+        type=float,
+        default=1.0,
+        help="0 with --lambda_route > 0: routing-only control",
+    )
+    ap.add_argument(
+        "--y_source",
+        choices=["student", "data"],
+        default="student",
+        help="data: off-policy control, generated rows are the row's own continuation",
+    )
     ap.add_argument("--check_every", type=int, default=50)
     ap.add_argument(
         "--holdout",
@@ -110,13 +122,15 @@ def main(argv=None):
         * (1 + math.cos(math.pi * min(s, args.steps) / args.steps)),
     )
     rows = datasets.load_from_disk(os.path.expanduser(args.data))
-    prompts = []
+    prompts, conts = [], []
+    gist_set = set(Global_data.gist_token_id)
     for r in rows:
         start = next(j for j, l in enumerate(r["labels"]) if l != -100)
         if start >= args.ctx_len:
             prompts.append(r["input_ids"][: args.ctx_len])
+            conts.append([t for t in r["input_ids"][args.ctx_len :] if t not in gist_set])
     if args.holdout:
-        prompts = prompts[: -args.holdout]
+        prompts, conts = prompts[: -args.holdout], conts[: -args.holdout]
     print(f"{len(prompts)} prompts of {args.ctx_len} tokens ({args.holdout} held out)", flush=True)
     gen = torch.Generator(device=dev).manual_seed(args.seed)
     log = open(os.path.join(args.out, "log.jsonl"), "a")
@@ -128,14 +142,19 @@ def main(argv=None):
         t0 = time.time()
         agg = {"rkl": 0.0, "route": 0.0, "keys_per_row": 0.0}
         for i in range(args.batch):
-            ctx = torch.tensor(
-                [prompts[order[((step - 1) * args.batch + i) % len(prompts)]]], device=dev
-            )
-            y, lp_roll, steps = gist_opsd.rollout(model, ctx, args.n_new, vocab, gen)
+            j = order[((step - 1) * args.batch + i) % len(prompts)]
+            ctx = torch.tensor([prompts[j]], device=dev)
+            forced = None
+            if args.y_source == "data":
+                forced = torch.tensor(conts[j][: args.n_new], device=dev)
+            n = args.n_new if forced is None else forced.numel()
+            y, lp_roll, steps = gist_opsd.rollout(model, ctx, n, vocab, gen, forced=forced)
             lp_t = gist_opsd.teacher_logprobs(teacher, ctx, y, vocab)
             lp_s, st = gist_opsd.replay(model, ctx, y, steps, vocab, route=args.lambda_route > 0)
             rkl = gist_opsd.reverse_kl(lp_s, lp_t).mean()
-            loss = rkl + (args.lambda_route * st["route"] if args.lambda_route > 0 else 0)
+            loss = args.rkl_weight * rkl + (
+                args.lambda_route * st["route"] if args.lambda_route > 0 else 0
+            )
             (loss / args.batch).backward()
             agg["rkl"] += float(rkl) / args.batch
             agg["route"] += float(st["route"]) / args.batch if args.lambda_route > 0 else 0.0

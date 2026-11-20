@@ -3,7 +3,8 @@
 For each checkpoint (stage-1 adapters, then the OPSD adapters), roll out on the same
 held-out prompts (the last --n rows of the spike SFT data, unused in training) with a
 fixed seed and report the mean reverse KL to the base model on generated tokens and the
-visible keys per generated row.
+visible keys per generated row. Forward KL (teacher mass the student drops) and top-1
+agreement with the base model guard against reverse KL falling by mode collapse.
 
     ATTN_IMPL=ref python experiments/opsd_eval.py --data ~/spike_data/sft \
         --ckpts runs/s3_d_joint/adapters.pt runs/s4b/adapters.pt
@@ -56,12 +57,14 @@ def main():
         _, vocab, model, _ = load_stage1(ck, args.model, dev)
         model.eval()
         gen = torch.Generator(device=dev).manual_seed(0)
-        rkl, keys = [], []
+        rkl, fkl, agree, keys = [], [], [], []
         for p in prompts:
             ctx = torch.tensor([p], device=dev)
             y, lp, steps = gist_opsd.rollout(model, ctx, args.n_new, vocab, gen)
             lp_t = gist_opsd.teacher_logprobs(teacher, ctx, y, vocab)
             rkl.append(float(gist_opsd.reverse_kl(lp, lp_t).mean()))
+            fkl.append(float(gist_opsd.forward_kl(lp, lp_t).mean()))
+            agree.append(float((lp.argmax(-1) == lp_t.argmax(-1)).float().mean()))
             keys.append(
                 float(
                     torch.stack(
@@ -78,8 +81,12 @@ def main():
                     "ckpt": ck,
                     "n": len(prompts),
                     "rkl_mean": sum(rkl) / len(rkl),
+                    "fkl_mean": sum(fkl) / len(fkl),
+                    "top1_agree": sum(agree) / len(agree),
                     "keys_per_row": sum(keys) / len(keys),
                     "rkl_per_prompt": [round(x, 4) for x in rkl],
+                    "fkl_per_prompt": [round(x, 4) for x in fkl],
+                    "agree_per_prompt": [round(x, 4) for x in agree],
                 }
             ),
             flush=True,

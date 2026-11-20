@@ -22,8 +22,8 @@ from typing import List, Optional
 import torch
 import torch.nn.functional as F
 
-from gist_utils import Global_data
 from gist_routing import routing_kl
+from gist_utils import Global_data
 from src.data.gist import make_hierarchical_gist_mask_greedy
 
 
@@ -70,16 +70,24 @@ def _logprobs(logits: torch.Tensor, vocab: int) -> torch.Tensor:
 
 
 @torch.no_grad()
-def rollout(model, ctx: torch.Tensor, n_new: int, vocab: int, generator=None):
-    """Sample n_new tokens at temperature 1. Returns (y [n], logprobs [n, vocab], steps)
-    where steps[j][l] is layer l's visible-key mask when y[j] was fed (j < n - 1)."""
+def rollout(
+    model, ctx: torch.Tensor, n_new: int, vocab: int, generator=None, greedy=False, forced=None
+):
+    """Sample n_new tokens at temperature 1 (argmax if greedy; the tokens of `forced` [n_new]
+    if given). Returns (y [n], logprobs [n, vocab], steps) where steps[j][l] is layer l's
+    visible-key mask when y[j] was fed (j < n - 1)."""
     attn = torch.ones_like(ctx)
     row = prefill_gist_mask(ctx)
     out = model(input_ids=ctx, attention_mask=attn, attention_mask_gist=row, use_cache=True)
     past, row = out.past_key_values, row[:, :, -1:]
     lps, ys, steps = [_logprobs(out.logits[0, -1], vocab)], [], []
     for t in range(n_new):
-        y = torch.multinomial(lps[-1].exp(), 1, generator=generator)
+        if forced is not None:
+            y = forced[t : t + 1]
+        elif greedy:
+            y = lps[-1].argmax().view(1)
+        else:
+            y = torch.multinomial(lps[-1].exp(), 1, generator=generator)
         ys.append(y)
         if t == n_new - 1:
             break
@@ -216,3 +224,8 @@ def replay_attention(module, query, key, value, scaling):
 def reverse_kl(student_lp: torch.Tensor, teacher_lp: torch.Tensor) -> torch.Tensor:
     """Per-token KL(p_S || p_T) from log-probabilities [n, vocab]."""
     return (student_lp.exp() * (student_lp - teacher_lp)).sum(-1)
+
+
+def forward_kl(student_lp: torch.Tensor, teacher_lp: torch.Tensor) -> torch.Tensor:
+    """Per-token KL(p_T || p_S): penalizes teacher mass the student drops (mode collapse)."""
+    return reverse_kl(teacher_lp, student_lp)
