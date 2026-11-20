@@ -50,3 +50,11 @@ S3,d_staged_per_level,0,mse2_final,0.275,f360c90,2026-11-20
 S3,b_joint_stopped150,0,suffix_kl_8192_step150,15.029,f360c90,2026-11-20
 S3,b_joint_stopped150,0,mse1_step150,0.022,f360c90,2026-11-20
 S3,b_joint_stopped150,0,mse2_step150,0.020,f360c90,2026-11-20
+S4b,train_first20_vs_last20,0,rkl,0.2545->0.1835,f360c90,2026-11-20
+S4b,train_first20_vs_last20,0,route_kl,0.4297->0.3002,f360c90,2026-11-20
+S4b,train_first20_vs_last20,0,keys_per_row,135.3->138.7,f360c90,2026-11-20
+S4b,train,0,replay_max_abs_lp_max_of_6,2.60e-05,f360c90,2026-11-20
+S4b,heldout16_stage1_ckpt,0,rkl,0.2800,f360c90,2026-11-20
+S4b,heldout16_opsd_ckpt,0,rkl,0.1261,f360c90,2026-11-20
+S4b,heldout16_stage1_ckpt,0,keys_per_row,140.06,f360c90,2026-11-20
+S4b,heldout16_opsd_ckpt,0,keys_per_row,137.57,f360c90,2026-11-20

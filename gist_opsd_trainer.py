@@ -29,7 +29,9 @@ from gist_utils import Global_data, add_gist_tokens
 
 def load_stage1(path, model_name, device):
     ck = torch.load(path, map_location="cpu")
-    a = ck["args"]
+    a = ck.get("stage1_args") or ck["args"]
+    if "lora" not in a:  # OPSD checkpoint saved before stage1_args was recorded
+        a = torch.load(a["stage1"], map_location="cpu")["args"]
     tok = AutoTokenizer.from_pretrained(model_name)
     vocab = len(tok)
     model = GistQwen2ForCausalLM.from_pretrained(model_name, dtype=torch.float32,
@@ -76,6 +78,8 @@ def main(argv=None):
     torch.manual_seed(args.seed)
 
     tok, vocab, model, groups = load_stage1(args.stage1, args.model, dev)
+    s1 = torch.load(args.stage1, map_location="cpu")
+    stage1_args = s1.get("stage1_args") or s1["args"]
     model.eval()
     teacher = Qwen2ForCausalLM.from_pretrained(args.model, dtype=torch.float32,
                                                attn_implementation="sdpa").to(dev).eval()
@@ -119,7 +123,8 @@ def main(argv=None):
         log.write(json.dumps(rec) + "\n"); log.flush()
     sd = {n: p.detach().cpu() for n, p in model.named_parameters() if "lora_" in n or "summary_bias" in n}
     sd["gist_embed"] = model.get_input_embeddings().weight.detach()[Global_data.gist_token_id].cpu()
-    torch.save({"args": vars(args), "state": sd, "gist_ids": Global_data.gist_token_id},
+    torch.save({"args": vars(args), "stage1_args": stage1_args, "state": sd,
+                "gist_ids": Global_data.gist_token_id},
                os.path.join(args.out, "adapters.pt"))
     print("saved", os.path.join(args.out, "adapters.pt"), flush=True)
 
