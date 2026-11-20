@@ -1,6 +1,6 @@
 # Handoff: Hierarchical Gist Compression + Selective Unfolding with OPSD (built on SSA)
 
-Nov 19, 2026 · @Someone（Nov 19 更新：设计决定、spike 计划、代码现状）
+Nov 19, 2026 · @Someone（Nov 19 更新：设计决定、spike 计划、代码现状；Nov 20 更新：深层树、decode 时的 gist 与 1M 上下文的计划）
 
 ## TL;DR 与使用方式
 
@@ -183,6 +183,24 @@ spike 全部通过后按顺序执行；每一项的验收标准满足后才进�
 
   按「Evaluation」跑全部对照与 ablation；在 7B 上用 SSA 的 kernel 测 TTFT / TPOT；整理结果表。
 
+## 下一阶段：深层树、decode 时的 gist 与 1M 上下文
+
+目标是支持 4–5 层的 gist 树、1M 上下文，并让 decode 生成的 token 也被压缩。代码层面的改动不大；决定成败的是三件事：逐级路由的误差随层数累积、32K 以外没有可用的老师、1M 时 summary 本身的 KV 放不进显存。父 issue 是 #11。
+
+**为什么要做深。** 每步 decode 都要对顶层的全部 summary 打分。4 叉树在 1M 上下文时，两层的顶层有 62.5K 个单元，五层只有 977 个；代价是从上到下多做三次选择。层数与分叉数一起决定这个权衡，4 叉五层与 8 或 16 叉三层哪个更好由下面的误差累积 spike 回答。
+
+**第 1 步：代码泛化到 L 层（#12）。** 插入规则、mask、选择循环和路由 KL 已经按 level 循环；写死两层的是 decode 快路径（`attn_candidate.py` 的 `num_levels in (1, 2)`、选择 metadata 缓存、`_select_per_group` 的快分支）、阶段一的老师链（g1:raw、hier:g1）、β 的跨度 (4, 16) 和 gist 词表。泛化后老师链是 g<sub>l</sub>:g<sub>l−1</sub>，每层多一次 attention，可以每步随机抽一级训练来控制成本；β 的跨度取 4<sup>l</sup>。CUDA kernel 读的是选好的 key 集合，预计不需要改。验收：L = 4 时噪声底仍约 1e-9，L = 2 时所有输出与现在逐位相同。
+
+**第 2 步：decode 时产生 gist（#13）。** 现在 decode 只在 mask 末尾补 1，生成的部分从不压缩，长推理输出的尾部线性增长且全部可见。改动有四处：decode 接上 `OnlineGistInserter`，每 4 个原始 token 强制喂入一个 gist（不采样，只写 KV），高层按同一规则级联；块关闭后，后续 query 看不到它的原始 token，只能通过展开读到；选择 metadata 缓存从「静态前缀」改成增量追加；OPSD 的 rollout 记录这些 gist 步，replay 带上它们，反向 KL 只在原始 token 上计算。验收的不变式是「边 decode 边插 gist」与「同一序列一次 prefill」的输出在浮点误差内一致。gist 与下一个原始 token 可以放进同一次前向（q_len = 2），避免多出约 33% 的 decode 步。spike 的 SFT 数据在回答部分已经按流式规则插入了 gist，阶段一训练时见过。
+
+**第 3 步：误差累积的 spike（#14）。** S2 测得仅 meta-gist 一级就只保留 43–57% 的 oracle chunk；若每级都丢一半，五级的召回约 6%。在训练过的 L 层模型上，沿用 S2 的方法测 L = 2…5 的逐级 oracle mass 召回（32K–128K），比较三种缓解：高层更宽的 beam（RecSA 每级 256）、没选中的节点作为粗粒度项留在 softmax 中（RecSA 的做法）、每级的路由 KL。逐级召回明显衰减时，先解决路由，再加层。
+
+**第 4 步：32K 以外的位置与老师（#15，待定）。** 原始 token 保持原位置，1M 位置超出 Qwen2.5-0.5B 训练过的 32K，需要 RoPE 外推（如 YaRN），且原模型自己也要能读这个长度。OPSD 的老师在 1M 上既贵又不可靠。候选：只在 ≤ 128K 做 OPSD，靠长度无关的树外推到 1M（前提是固定 k，现在的 k = ⌊k_len / 448⌋ + 1 在 1M 时约为 2233）；换到原生 1M 的模型（如 Qwen2.5-7B-Instruct-1M）；长程只用阶段一的局部老师 g<sub>l</sub>:g<sub>l−1</sub>。倾向是前一种加局部老师，在 1M 上用 RULER / NIAH 验证；目标模型与老师路线需要人来定。
+
+**第 5 步：多级 offload（扩展 #10）。** L 层树的 summary 总数约为 N/3，1M 时约 33 万个 token 的 KV（7B 约 19 GB）。level-0 的 summary 也放到 host，GPU 只留 level ≥ 1（约 8.3 万个，约 4.8 GB），选中 level-1 单元后再取它的子节点；选择需要 L 级的 rank-select kernel，固定 k 是前提。
+
+执行顺序：第 1、2 步在 L4 上做；第 3 步决定是否继续加层；第 4、5 步等 H100 和人的决定。OPSD 与 off-policy 路由 KL 对照的结果出来后，若 OPSD 不优于对照，第 2 步之后的训练方案要重新考虑。
+
 ## Evaluation
 
 主对照是原版 SSA；每个 ablation 只改一个因素，每个配置至少 3 个随机种子（spike 除外），差距小于种子波动时不下结论。
@@ -267,6 +285,9 @@ spike 全部通过后按顺序执行；每一项的验收标准满足后才进�
 | OPSD 鼓励多展开 | 实际展开数上升 | 固定 adaptive top-k；监控展开数 |
 | 长程 OPSD 不稳定 | KL 震荡或熵塌缩 | 截断 rollout；降低学习率；先短后长的课程 |
 | 0.5B 上 rollout 太慢 | ref decode 每 token 远超 100 ms | 短上下文、更大 batch；必要时把 kernel 模板化到 D=64（需要明确同意改 `kernels/`） |
+| 深层树的召回逐级相乘 | L 增大时逐级 oracle mass 召回明显下降 | 高层更宽的 beam；未选节点作为粗粒度项留在 softmax；每级路由 KL；更大的分叉、更少的层 |
+| decode 时的 gist 让缓存失效或行为不一致 | 边 decode 边插 gist 与一次 prefill 的输出不一致 | 增量追加的选择缓存；以一致性测试为门槛 |
+| 32K 以外没有可靠的老师 | 原模型在长桶上的质量本身就低 | ≤ 128K 上做 OPSD 并固定 k；局部老师；原生 1M 的模型 |
 | 上限为原模型 | 无法复现 SSA 在 RAG 上超过 full attention 的收益 | 作为 OPSD + NTP 的 ablation，不作为承诺 |
 
 ## References
