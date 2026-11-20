@@ -1,0 +1,58 @@
+tests/test_gist_mask_coverage.py
+  s_466735a13fa48a::t_2ace39934def5a 56-58,76-78,86-88,92-94
+tests/test_gist_noise_floor.py
+  s_466735a13fa48a::t_2ace39934def5a 38,41,45,52-53,85-96
+tests/test_gist_flex_mask.py
+  s_466735a13fa48a::t_2ace39934def5a 47-50,63-68,74-76,82-83,90-93,141,145-147,163-164
+src/data/gist_stream.py
+  s_466735a13fa48a::t_1f4de116646aa7 101-110
+experiments/opsd_eval.py
+  s_466735a13fa48a::t_6d4d63f1abe05c 25
+  s_466735a13fa48a::t_53472a265a7f3b 46,62
+tests/test_teacher_masks.py
+  s_466735a13fa48a::t_53472a265a7f3b 90-92,94-96,120-122,127-132
+  s_466735a13fa48a::t_b28de81808bf69 76-89,93,97-119,123-126,133
+tests/test_gist_opsd.py
+  s_466735a13fa48a::t_79114938d88fb1 71,84
+  s_466735a13fa48a::t_2ace39934def5a 16-18,32-33,53
+tests/test_gist_tokens.py
+  s_466735a13fa48a::t_2ace39934def5a 28-36
+gist_lora.py
+  s_466735a13fa48a::t_6d4d63f1abe05c 85-89
+tests/test_gist_stream.py
+  s_466735a13fa48a::t_2ace39934def5a 26-28,36,93-104,109-112,135-143,147-150,169
+tests/test_chunked_loss.py
+  s_466735a13fa48a::t_2ace39934def5a 31-33,39-49,56-63,74-76,80-85
+gist_stage1_trainer.py
+  s_466735a13fa48a::t_1f4de116646aa7 49-51,102-117,122,140-147,155-160,175,245,283
+  s_466735a13fa48a::t_6d4d63f1abe05c 25,28
+  s_466735a13fa48a::t_53472a265a7f3b 248-250
+tests/gpu_validate_flex.py
+  s_466735a13fa48a::t_2ace39934def5a 86-88,94-99,105-107,114-116,142-150,158-160,165-168,172-183,194-196,200-208,218-220,238-240,243-245,252-259,273-280,287,294-296,298,331-343,349-351,355-363,382,384-389,394,398-406,417-422,433-442
+tests/test_deep_routing.py
+  s_466735a13fa48a::t_2ace39934def5a 20
+gist_opsd_trainer.py
+  s_466735a13fa48a::t_6d4d63f1abe05c 25,28,41-42,46,50-51,54,66-72,141
+tests/test_stage1.py
+  s_466735a13fa48a::t_2ace39934def5a 213-251
+tests/test_gist_flex_model.py
+  s_466735a13fa48a::t_2ace39934def5a 19-30,47-53,72-78,80-85,89-91,108-115,154-156,162
+src/data/gist_flex_mask.py
+  s_466735a13fa48a::t_ebc8ad3046b4fb 107-109,112-115,137-139,153-156,167-170,181,185-188
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "633acba9cd4c7fd03c3f2ba8394c36a4f744299d",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
