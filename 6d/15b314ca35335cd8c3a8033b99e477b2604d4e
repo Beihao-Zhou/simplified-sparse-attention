@@ -1,0 +1,42 @@
+src/data/gist_stream.py
+  s_466735a13fa48a::t_1f4de116646aa7 101-110
+src/data/gist_flex_mask.py
+  s_466735a13fa48a::t_ebc8ad3046b4fb 107-109,112-115,137-139,153-156,167-170,181,185-188
+tests/test_gist_noise_floor.py
+  s_466735a13fa48a::t_2ace39934def5a 38,41,45,52-53,85-96
+tests/test_stage1.py
+  s_466735a13fa48a::t_2ace39934def5a 213-251
+tests/test_teacher_masks.py
+  s_466735a13fa48a::t_b28de81808bf69 76-89,93,97-119,123-126,133
+  s_466735a13fa48a::t_53472a265a7f3b 90-92,94-96,120-122,127-132
+gist_stage1_trainer.py
+  s_466735a13fa48a::t_6d4d63f1abe05c 25,28
+  s_466735a13fa48a::t_1f4de116646aa7 49-51,102-117,122,140-147,155-160,175,245,283
+  s_466735a13fa48a::t_53472a265a7f3b 248-250
+experiments/opsd_eval.py
+  s_466735a13fa48a::t_53472a265a7f3b 46,62
+  s_466735a13fa48a::t_6d4d63f1abe05c 25
+tests/test_gist_opsd.py
+  s_466735a13fa48a::t_79114938d88fb1 71,84
+  s_466735a13fa48a::t_2ace39934def5a 16-18,32-33,53
+gist_lora.py
+  s_466735a13fa48a::t_6d4d63f1abe05c 85-89
+gist_opsd_trainer.py
+  s_466735a13fa48a::t_6d4d63f1abe05c 25,28,41-42,46,50-51,54,66-72,141
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "6d15b314ca35335cd8c3a8033b99e477b2604d4e",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
