@@ -37,3 +37,16 @@ S2,L24_group_union,0,mass_recall,0.362,9bcc634,2026-11-19
 S2,L8_level1_stage,0,oracle_chunks_kept,0.426,9bcc634,2026-11-19
 S2,L16_level1_stage,0,oracle_chunks_kept,0.574,9bcc634,2026-11-19
 S2,L24_level1_stage,0,oracle_chunks_kept,0.470,9bcc634,2026-11-19
+S3,d_joint_shared,0,suffix_kl_8192_step0,8.196,f360c90,2026-11-20
+S3,d_joint_shared,0,suffix_kl_8192_final,1.335,f360c90,2026-11-20
+S3,d_joint_shared,0,suffix_kl_16384_step0,7.997,f360c90,2026-11-20
+S3,d_joint_shared,0,suffix_kl_16384_final,1.362,f360c90,2026-11-20
+S3,d_joint_shared,0,mse1_final,0.125,f360c90,2026-11-20
+S3,d_joint_shared,0,mse2_final,0.060,f360c90,2026-11-20
+S3,d_joint_shared,0,route_kl_final,0.403,f360c90,2026-11-20
+S3,d_staged_per_level,0,suffix_kl_8192_final,4.828,f360c90,2026-11-20
+S3,d_staged_per_level,0,suffix_kl_16384_final,5.376,f360c90,2026-11-20
+S3,d_staged_per_level,0,mse2_final,0.275,f360c90,2026-11-20
+S3,b_joint_stopped150,0,suffix_kl_8192_step150,15.029,f360c90,2026-11-20
+S3,b_joint_stopped150,0,mse1_step150,0.022,f360c90,2026-11-20
+S3,b_joint_stopped150,0,mse2_step150,0.020,f360c90,2026-11-20
