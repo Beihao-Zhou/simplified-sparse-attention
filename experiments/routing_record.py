@@ -29,7 +29,7 @@ def length_bucket(n_raw: int) -> str:
 
 def _find(seq: Sequence[int], sub: Sequence[int]) -> List[int]:
     n = len(sub)
-    return [i for i in range(len(seq) - n + 1) if n and list(seq[i:i + n]) == list(sub)]
+    return [i for i in range(len(seq) - n + 1) if n and list(seq[i : i + n]) == list(sub)]
 
 
 def answer_chunks(gisted: Sequence[int], gist_ids: Sequence[int], answers, tokenizer) -> List[int]:
@@ -66,15 +66,17 @@ def record_decode_call(out_dir, module, query, key, cache, top_k, scaling, meta)
     G0, G1 = cache.Gmax
     if G0 == 0 or G1 == 0:
         return
+    if cache.K_gist_bf16_T[0] is None:
+        raise RuntimeError("routing recording needs DECODE_SELECT=head (per-head summary keys)")
 
-    q = query[0, :, 0, :].float()                                   # [H, d]
+    q = query[0, :, 0, :].float()  # [H, d]
     H, d = q.shape
     s0 = torch.einsum("hd,hdg->hg", q, cache.K_gist_bf16_T[0][0].float())
     s1 = torch.einsum("hd,hdg->hg", q, cache.K_gist_bf16_T[1][0].float())
     parent0 = cache.parent_chunk_ids[0][0].clone()
     parent0[parent0 >= G1] = -1
 
-    K = key[0].float()                                              # [num_kv, k_len, d]
+    K = key[0].float()  # [num_kv, k_len, d]
     num_kv = K.shape[0]
     logits = torch.einsum("ghd,gkd->ghk", q.view(num_kv, H // num_kv, d), K).reshape(H, -1)
     raw = ~cache.is_gist_full[0]
@@ -88,8 +90,12 @@ def record_decode_call(out_dir, module, query, key, cache, top_k, scaling, meta)
     name = f"{meta['task']}_{meta['sample']:03d}_L{layer:02d}_t{step:03d}.npz"
     np.savez_compressed(
         os.path.join(out_dir, name),
-        s0=s0.cpu().numpy(), s1=s1.cpu().numpy(), parent0=parent0.cpu().numpy(),
-        m0=m0.cpu().numpy(), k0=np.int64(k0),
+        s0=s0.cpu().numpy(),
+        s1=s1.cpu().numpy(),
+        parent0=parent0.cpu().numpy(),
+        m0=m0.cpu().numpy(),
+        k0=np.int64(k0),
         answer0=np.asarray([c for c in meta["answer0"] if c < G0], dtype=np.int64),
-        task=meta["task"], bucket=meta["bucket"],
+        task=meta["task"],
+        bucket=meta["bucket"],
     )

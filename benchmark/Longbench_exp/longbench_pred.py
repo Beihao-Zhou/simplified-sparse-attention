@@ -378,6 +378,11 @@ def get_pred(
             # Routing analysis keeps the samples that fit; the scores file stays aligned.
             print(f"OOM at context length {context_length}; sample skipped")
             torch.cuda.empty_cache()
+            with open(out_path, "a", encoding="utf-8") as f:
+                json.dump({"length": json_obj["length"], "pred": "", "answers": json_obj["answers"],
+                           "all_classes": json_obj["all_classes"], "skipped": True},
+                          f, ensure_ascii=False)
+                f.write("\n")
             continue
         _BENCH_RUNS["correctness"] = None
         _BENCH_RUNS["token_match"] = None

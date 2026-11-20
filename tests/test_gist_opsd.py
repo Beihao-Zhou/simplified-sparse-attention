@@ -9,21 +9,37 @@ from gist_qwen2 import GistQwen2ForCausalLM
 from gist_utils import Global_data
 from src.data.gist_stream import insert_gists_with_map
 
-VOCAB = 1000                    # base vocabulary; summary ids sit above it
+VOCAB = 1000  # base vocabulary; summary ids sit above it
 GIST_IDS = [1000, 1001]
 
 
 @pytest.fixture
 def setup(monkeypatch):
     monkeypatch.setenv("ATTN_IMPL", "ref")
-    keys = ("gist_token_id", "chunk_size", "sink_size", "num_previous_chunks", "pad_token_id",
-            "train_attn", "top_k", "last_pos", "opsd_replay")
+    keys = (
+        "gist_token_id",
+        "chunk_size",
+        "sink_size",
+        "num_previous_chunks",
+        "pad_token_id",
+        "train_attn",
+        "top_k",
+        "last_pos",
+        "opsd_replay",
+    )
     saved = {k: getattr(Global_data, k) for k in keys}
     Global_data.gist_token_id, Global_data.chunk_size = GIST_IDS, [4, 4]
     Global_data.sink_size, Global_data.num_previous_chunks = 3, 1
     Global_data.pad_token_id, Global_data.train_attn = 0, "dense"
-    cfg = Qwen2Config(vocab_size=1100, hidden_size=64, intermediate_size=128, num_hidden_layers=3,
-                      num_attention_heads=4, num_key_value_heads=2, max_position_embeddings=4096)
+    cfg = Qwen2Config(
+        vocab_size=1100,
+        hidden_size=64,
+        intermediate_size=128,
+        num_hidden_layers=3,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        max_position_embeddings=4096,
+    )
     cfg._attn_implementation = "sdpa"
     torch.manual_seed(0)
     model = GistQwen2ForCausalLM(cfg).float().eval()
@@ -51,7 +67,7 @@ def test_selection_is_sparse_and_replayed(setup):
     model, _, ctx = setup
     y, _, steps = gist_opsd.rollout(model, ctx, 6, VOCAB, torch.Generator().manual_seed(0))
     is_sum = torch.isin(ctx[0], torch.tensor(GIST_IDS))
-    seen = steps[0][1][:, :ctx.shape[1]] & is_sum
+    seen = steps[0][1][:, : ctx.shape[1]] & is_sum
     assert 0 < int(seen.any(0).sum()) < int(is_sum.sum())
 
 
@@ -67,9 +83,9 @@ def test_gradients(setup):
     hpg = model.config.num_attention_heads // model.config.num_key_value_heads
     checked = 0
     for layer, key in st["probe"].items():
-        vis = st["masks"][layer][0]                                   # [H, R, K]
-        seen = vis.view(-1, hpg, *vis.shape[1:]).any(1).any(1)        # [num_kv, K]
-        g = key.grad[0].abs().sum(-1)                                 # [num_kv, K]
+        vis = st["masks"][layer][0]  # [H, R, K]
+        seen = vis.view(-1, hpg, *vis.shape[1:]).any(1).any(1)  # [num_kv, K]
+        g = key.grad[0].abs().sum(-1)  # [num_kv, K]
         unseen_sum = ~seen & is_sum
         seen_sum = seen & is_sum
         assert g[unseen_sum].max() == 0, f"layer {layer}: unselected summary got reverse-KL grad"
@@ -84,7 +100,9 @@ def test_gradients(setup):
         vis = st["masks"][layer][0]
         seen = vis.view(-1, hpg, *vis.shape[1:]).any(1).any(1)
         g = key.grad[0].abs().sum(-1)
-        assert g[~seen & is_sum].gt(0).float().mean() > 0.9, f"layer {layer}: routing KL misses unselected summaries"
+        assert (
+            g[~seen & is_sum].gt(0).float().mean() > 0.9
+        ), f"layer {layer}: routing KL misses unselected summaries"
 
 
 def test_beta_folded_into_qk_matches_explicit_bias(setup):

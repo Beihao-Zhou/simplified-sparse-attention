@@ -1231,8 +1231,10 @@ class GistQwen2Model(Qwen2PreTrainedModel):
 
         if inputs_embeds is None:
             inputs_embeds: torch.Tensor = self.embed_tokens(input_ids)
-        if input_ids is not None and Global_data.gist_token_id is not None:
-            # Rows the gist-only LoRA acts on (gist_lora.py); unused otherwise.
+        if Global_data.lora_active:
+            if input_ids is None:
+                raise ValueError("gist LoRA / summary bias need input_ids to find summary rows")
+            # Rows the gist-only LoRA and the summary bias act on (gist_lora.py).
             Global_data.lora_row_mask = torch.isin(
                 input_ids, torch.tensor(Global_data.gist_token_id, device=input_ids.device))
             Global_data.lora_row_level = torch.full_like(input_ids, -1)
@@ -1577,7 +1579,9 @@ class GistQwen2ForCausalLM(Qwen2PreTrainedModel, GistGenerationMixin):
 
                 hidden_states = outputs.last_hidden_state
                 if Global_data.stage1 is not None and labels is not None:
-                    loss, logits = stage1_loss(hidden_states, self.lm_head, labels, kwargs.get("num_items_in_batch"))
+                    loss, logits = stage1_loss(
+                        hidden_states, self.lm_head, labels, kwargs.get("num_items_in_batch")
+                    )
                 elif self.training and labels is not None and Global_data.loss_chunk_size > 0:
                     loss = chunked_causal_lm_loss(hidden_states, self.lm_head, labels,
                                                   Global_data.loss_chunk_size,

@@ -14,26 +14,32 @@ import torch
 import torch.nn.functional as F
 
 
-def routing_kl(q: torch.Tensor, q_pos: torch.Tensor, k: torch.Tensor, ids: torch.Tensor,
-               gist_ids: Sequence[int], scaling: float,
-               beta: Optional[torch.Tensor] = None) -> torch.Tensor:
+def routing_kl(
+    q: torch.Tensor,
+    q_pos: torch.Tensor,
+    k: torch.Tensor,
+    ids: torch.Tensor,
+    gist_ids: Sequence[int],
+    scaling: float,
+    beta: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
     """q [H, R, d] at positions q_pos [R]; k [H, K, d] for ids [K]; beta [H, K] or None."""
-    logits = torch.einsum("hrd,hkd->hrk", q, k) * scaling                # [H, R, K]
+    logits = torch.einsum("hrd,hkd->hrk", q, k) * scaling  # [H, R, K]
     raw = ~torch.isin(ids, torch.tensor(list(gist_ids), device=ids.device))
     losses = []
     for gid in gist_ids:
         is_g = ids == gid
-        g_pos = torch.nonzero(is_g).flatten()                             # [G]
+        g_pos = torch.nonzero(is_g).flatten()  # [G]
         G = g_pos.numel()
         if G < 2:
             continue
-        unit = torch.cumsum(is_g.long(), 0)                               # raw key -> its unit
+        unit = torch.cumsum(is_g.long(), 0)  # raw key -> its unit
         member = raw & (unit < G)
-        cand = g_pos[None, :] < q_pos[:, None]                            # [R, G]
+        cand = g_pos[None, :] < q_pos[:, None]  # [R, G]
         rows = cand.sum(-1) >= 2
         if not rows.any():
             continue
-        onehot = F.one_hot(unit[member], G).to(logits.dtype)               # [Kraw, G]
+        onehot = F.one_hot(unit[member], G).to(logits.dtype)  # [Kraw, G]
         with torch.no_grad():
             x = logits[..., member]
             mx = x.amax(-1, keepdim=True)

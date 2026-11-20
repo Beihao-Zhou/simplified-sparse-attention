@@ -34,12 +34,17 @@ def load_stage1(path, model_name, device):
         a = torch.load(a["stage1"], map_location="cpu")["args"]
     tok = AutoTokenizer.from_pretrained(model_name)
     vocab = len(tok)
-    model = GistQwen2ForCausalLM.from_pretrained(model_name, dtype=torch.float32,
-                                                 attn_implementation="sdpa").to(device)
+    model = GistQwen2ForCausalLM.from_pretrained(
+        model_name, dtype=torch.float32, attn_implementation="sdpa"
+    ).to(device)
     gist_ids = add_gist_tokens(tok, model, num_levels=2)
     assert gist_ids == ck["gist_ids"], (gist_ids, ck["gist_ids"])
     Global_data.gist_token_id = gist_ids
-    Global_data.chunk_size, Global_data.sink_size, Global_data.num_previous_chunks = [4, 4], a["sink"], 1
+    Global_data.chunk_size, Global_data.sink_size, Global_data.num_previous_chunks = (
+        [4, 4],
+        a["sink"],
+        1,
+    )
     Global_data.pad_token_id, Global_data.train_attn = tok.pad_token_id, "dense"
     groups = apply_lora(model, a["lora"], r=a["r"], per_level=a.get("per_level", False))
     groups["beta"] = apply_summary_bias(model) if a.get("beta") else []
@@ -55,7 +60,9 @@ def load_stage1(path, model_name, device):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--model", default="Qwen/Qwen2.5-0.5B-Instruct")
     ap.add_argument("--stage1", required=True, help="adapters.pt from gist_stage1_trainer.py")
     ap.add_argument("--data", required=True, help="converted spike SFT data")
@@ -68,6 +75,12 @@ def main(argv=None):
     ap.add_argument("--warmup", type=int, default=10)
     ap.add_argument("--lambda_route", type=float, default=0.1)
     ap.add_argument("--check_every", type=int, default=50)
+    ap.add_argument(
+        "--holdout",
+        type=int,
+        default=16,
+        help="leave the last N eligible prompts out of training (experiments/opsd_eval.py uses them)",
+    )
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args(argv)
     assert os.environ.get("ATTN_IMPL") == "ref", "0.5B (head_dim 64) needs ATTN_IMPL=ref"
@@ -81,28 +94,43 @@ def main(argv=None):
     s1 = torch.load(args.stage1, map_location="cpu")
     stage1_args = s1.get("stage1_args") or s1["args"]
     model.eval()
-    teacher = Qwen2ForCausalLM.from_pretrained(args.model, dtype=torch.float32,
-                                               attn_implementation="sdpa").to(dev).eval()
+    teacher = (
+        Qwen2ForCausalLM.from_pretrained(
+            args.model, dtype=torch.float32, attn_implementation="sdpa"
+        )
+        .to(dev)
+        .eval()
+    )
     params = [p for k in ("lora_qo", "lora_kv", "embed", "beta") for p in groups[k]]
     opt = torch.optim.AdamW(params, lr=args.lr, weight_decay=0.0)
-    sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: min(1.0, (s + 1) / args.warmup) *
-                                              0.5 * (1 + math.cos(math.pi * min(s, args.steps) / args.steps)))
+    sched = torch.optim.lr_scheduler.LambdaLR(
+        opt,
+        lambda s: min(1.0, (s + 1) / args.warmup)
+        * 0.5
+        * (1 + math.cos(math.pi * min(s, args.steps) / args.steps)),
+    )
     rows = datasets.load_from_disk(os.path.expanduser(args.data))
     prompts = []
     for r in rows:
         start = next(j for j, l in enumerate(r["labels"]) if l != -100)
         if start >= args.ctx_len:
-            prompts.append(r["input_ids"][:args.ctx_len])
-    print(f"{len(prompts)} prompts of {args.ctx_len} tokens", flush=True)
+            prompts.append(r["input_ids"][: args.ctx_len])
+    if args.holdout:
+        prompts = prompts[: -args.holdout]
+    print(f"{len(prompts)} prompts of {args.ctx_len} tokens ({args.holdout} held out)", flush=True)
     gen = torch.Generator(device=dev).manual_seed(args.seed)
     log = open(os.path.join(args.out, "log.jsonl"), "a")
-    order = torch.randperm(len(prompts), generator=torch.Generator().manual_seed(args.seed)).tolist()
+    order = torch.randperm(
+        len(prompts), generator=torch.Generator().manual_seed(args.seed)
+    ).tolist()
 
     for step in range(1, args.steps + 1):
         t0 = time.time()
         agg = {"rkl": 0.0, "route": 0.0, "keys_per_row": 0.0}
         for i in range(args.batch):
-            ctx = torch.tensor([prompts[order[((step - 1) * args.batch + i) % len(prompts)]]], device=dev)
+            ctx = torch.tensor(
+                [prompts[order[((step - 1) * args.batch + i) % len(prompts)]]], device=dev
+            )
             y, lp_roll, steps = gist_opsd.rollout(model, ctx, args.n_new, vocab, gen)
             lp_t = gist_opsd.teacher_logprobs(teacher, ctx, y, vocab)
             lp_s, st = gist_opsd.replay(model, ctx, y, steps, vocab, route=args.lambda_route > 0)
@@ -111,21 +139,44 @@ def main(argv=None):
             (loss / args.batch).backward()
             agg["rkl"] += float(rkl) / args.batch
             agg["route"] += float(st["route"]) / args.batch if args.lambda_route > 0 else 0.0
-            agg["keys_per_row"] += float(torch.stack([m.sum(-1).float().mean() for m in st["masks"][1:]]).mean()) / args.batch
-            if args.check_every and step % args.check_every == 1 and i == 0:
+            agg["keys_per_row"] += (
+                float(torch.stack([m.sum(-1).float().mean() for m in st["masks"][1:]]).mean())
+                / args.batch
+            )
+            if args.check_every and (step - 1) % args.check_every == 0 and i == 0:
                 idx = torch.arange(len(y), device=dev)
-                agg["replay_max_abs_lp"] = float((lp_s.detach()[idx, y] - lp_roll[idx, y]).abs().max())
+                agg["replay_max_abs_lp"] = float(
+                    (lp_s.detach()[idx, y] - lp_roll[idx, y]).abs().max()
+                )
         torch.nn.utils.clip_grad_norm_(params, 1.0)
-        opt.step(); sched.step(); opt.zero_grad(set_to_none=True)
-        rec = {"step": step, "lr": sched.get_last_lr()[0], "sec": round(time.time() - t0, 1),
-               "mem_gb": round(torch.cuda.max_memory_allocated() / 2**30, 2), **agg}
+        opt.step()
+        sched.step()
+        opt.zero_grad(set_to_none=True)
+        rec = {
+            "step": step,
+            "lr": sched.get_last_lr()[0],
+            "sec": round(time.time() - t0, 1),
+            "mem_gb": round(torch.cuda.max_memory_allocated() / 2**30, 2),
+            **agg,
+        }
         print(json.dumps(rec), flush=True)
-        log.write(json.dumps(rec) + "\n"); log.flush()
-    sd = {n: p.detach().cpu() for n, p in model.named_parameters() if "lora_" in n or "summary_bias" in n}
+        log.write(json.dumps(rec) + "\n")
+        log.flush()
+    sd = {
+        n: p.detach().cpu()
+        for n, p in model.named_parameters()
+        if "lora_" in n or "summary_bias" in n
+    }
     sd["gist_embed"] = model.get_input_embeddings().weight.detach()[Global_data.gist_token_id].cpu()
-    torch.save({"args": vars(args), "stage1_args": stage1_args, "state": sd,
-                "gist_ids": Global_data.gist_token_id},
-               os.path.join(args.out, "adapters.pt"))
+    torch.save(
+        {
+            "args": vars(args),
+            "stage1_args": stage1_args,
+            "state": sd,
+            "gist_ids": Global_data.gist_token_id,
+        },
+        os.path.join(args.out, "adapters.pt"),
+    )
     print("saved", os.path.join(args.out, "adapters.pt"), flush=True)
 
 

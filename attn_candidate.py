@@ -1170,7 +1170,7 @@ def attn_dispatcher(
     #     gist_qwen2.eager_attention_forward_*.
     #   * Inference (eval)           -> sparse_attention_forward (flex/dense
     #     prefill + compact sparse decode). ATTN_IMPL=ref forces eager for debugging.
-    if getattr(Global_data, "opsd_replay", None) is not None and not decode:
+    if getattr(Global_data, "opsd_replay", None) is not None:
         # OPSD replay of generated rows with recorded selections (gist_opsd.py).
         from gist_opsd import replay_attention
         return replay_attention(module, query, key, value, scaling)
@@ -1178,8 +1178,15 @@ def attn_dispatcher(
     if getattr(module, "summary_bias", None) is not None and not module.training:
         # Trained per-summary bias (gist_lora.SummaryBias), folded into q/k (ref path only).
         from gist_lora import augment_with_beta
+        if not force_ref and not getattr(attn_dispatcher, "_warned_beta", False):
+            import warnings
+            warnings.warn("summary bias is only supported on the eager reference path; "
+                          "ignoring ATTN_IMPL / PREFILL_KERNEL / DECODE_SELECT")
+            attn_dispatcher._warned_beta = True
         q, k, v = augment_with_beta(module, query, key, value, scaling)
-        out, w = _call_ref(module, q, k, v, attention_mask, scaling, dropout, decode, chunk_q, **kwargs)
+        out, w = _call_ref(
+            module, q, k, v, attention_mask, scaling, dropout, decode, chunk_q, **kwargs
+        )
         return out[..., :-1].contiguous(), w
     if force_ref or module.training:
         return _call_ref(

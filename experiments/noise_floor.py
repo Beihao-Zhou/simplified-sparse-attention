@@ -37,8 +37,8 @@ def reverse_kl(student_h, teacher_h, lm_head, chunk=1024):
     """Per-token KL(p_s || p_t) from final hidden states, without holding [T, vocab] logits."""
     out = []
     for s in range(0, student_h.shape[0], chunk):
-        ls = F.log_softmax(lm_head(student_h[s:s + chunk]).float(), -1)
-        lt = F.log_softmax(lm_head(teacher_h[s:s + chunk]).float(), -1)
+        ls = F.log_softmax(lm_head(student_h[s : s + chunk]).float(), -1)
+        lt = F.log_softmax(lm_head(teacher_h[s : s + chunk]).float(), -1)
         out.append((ls.exp() * (ls - lt)).sum(-1))
     return torch.cat(out)
 
@@ -64,8 +64,11 @@ def measure(student, teacher, raw_ids, gist_ids, chunk_size, group):
     t_h = teacher.model(input_ids=raw).last_hidden_state[0]
     res = {}
     for name, vis in (("replace", False), ("sgsr", True)):
-        s_h = student.model(input_ids=toks, attention_mask=torch.ones_like(toks),
-                            attention_mask_gist=gist_mask(src, vis)).last_hidden_state[0]
+        s_h = student.model(
+            input_ids=toks,
+            attention_mask=torch.ones_like(toks),
+            attention_mask_gist=gist_mask(src, vis),
+        ).last_hidden_state[0]
         res[name] = reverse_kl(s_h[src >= 0], t_h, lm_head)
         del s_h
     shifted = torch.nonzero(src >= 0).flatten()[None]  # raw tokens' indices in the gisted sequence
@@ -90,10 +93,20 @@ def main():
     dev = "cuda" if torch.cuda.is_available() else "cpu"
 
     tok = AutoTokenizer.from_pretrained(args.model)
-    teacher = Qwen2ForCausalLM.from_pretrained(args.model, torch_dtype=torch.float32,
-                                               attn_implementation="sdpa").to(dev).eval()
-    student = GistQwen2ForCausalLM.from_pretrained(args.model, torch_dtype=torch.float32,
-                                                   attn_implementation="sdpa").to(dev).eval()
+    teacher = (
+        Qwen2ForCausalLM.from_pretrained(
+            args.model, torch_dtype=torch.float32, attn_implementation="sdpa"
+        )
+        .to(dev)
+        .eval()
+    )
+    student = (
+        GistQwen2ForCausalLM.from_pretrained(
+            args.model, torch_dtype=torch.float32, attn_implementation="sdpa"
+        )
+        .to(dev)
+        .eval()
+    )
     gist_ids = add_gist_tokens(tok, student, num_levels=2)
     Global_data.gist_token_id = gist_ids
     Global_data.chunk_size = [args.chunk_size, args.group]
@@ -102,8 +115,12 @@ def main():
 
     docs = datasets.load_from_disk(os.path.expanduser(args.longbench_dir))
     docs = [d["context"] for d in docs.select(range(args.docs))]
-    commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True,
-                            text=True).stdout.strip() or "unknown"
+    commit = (
+        subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True
+        ).stdout.strip()
+        or "unknown"
+    )
     today = datetime.date.today().isoformat()
 
     rows = []
@@ -113,14 +130,25 @@ def main():
             ids = tok(doc, add_special_tokens=False).input_ids[:L]
             if len(ids) < L:
                 continue
-            for k, v in measure(student, teacher, ids, gist_ids, args.chunk_size, args.group).items():
+            for k, v in measure(
+                student, teacher, ids, gist_ids, args.chunk_size, args.group
+            ).items():
                 acc.setdefault(k, []).append(v)
             torch.cuda.empty_cache()
         for k, vs in acc.items():
             v = torch.cat(vs)
             for metric, val in (("mean_rkl", v.mean()), ("max_rkl", v.max())):
-                rows.append({"spike": "S1", "config": f"{k}_L{L}", "seed": 0, "metric": metric,
-                             "value": f"{val.item():.3e}", "commit": commit, "date": today})
+                rows.append(
+                    {
+                        "spike": "S1",
+                        "config": f"{k}_L{L}",
+                        "seed": 0,
+                        "metric": metric,
+                        "value": f"{val.item():.3e}",
+                        "commit": commit,
+                        "date": today,
+                    }
+                )
                 print(f"{k:8s} L={L:5d} docs={len(vs)} {metric}={val.item():.3e}")
 
     new = not os.path.exists(args.out)

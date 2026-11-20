@@ -46,6 +46,8 @@ class Global_data:
     lora_row_mask = None
     # [B, T] long, -1 for raw tokens and l for level-l summaries (per-level LoRA, beta).
     lora_row_level = None
+    # Set by gist_lora.apply_lora / apply_summary_bias; the row masks are built only then.
+    lora_active = False
     sep_num = 0
     add_raw = False
     kl_loss = False

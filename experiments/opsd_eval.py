@@ -42,11 +42,16 @@ def main():
         r = rows[i]
         start = next(j for j, l in enumerate(r["labels"]) if l != -100)
         if start >= args.ctx_len:
-            prompts.append(r["input_ids"][:args.ctx_len])
+            prompts.append(r["input_ids"][: args.ctx_len])
         if len(prompts) == args.n:
             break
-    teacher = Qwen2ForCausalLM.from_pretrained(args.model, dtype=torch.float32,
-                                               attn_implementation="sdpa").to(dev).eval()
+    teacher = (
+        Qwen2ForCausalLM.from_pretrained(
+            args.model, dtype=torch.float32, attn_implementation="sdpa"
+        )
+        .to(dev)
+        .eval()
+    )
     for ck in args.ckpts:
         _, vocab, model, _ = load_stage1(ck, args.model, dev)
         model.eval()
@@ -57,11 +62,28 @@ def main():
             y, lp, steps = gist_opsd.rollout(model, ctx, args.n_new, vocab, gen)
             lp_t = gist_opsd.teacher_logprobs(teacher, ctx, y, vocab)
             rkl.append(float(gist_opsd.reverse_kl(lp, lp_t).mean()))
-            keys.append(float(torch.stack([torch.stack([m.sum().float() / m.shape[0] for m in st[1:]]).mean()
-                                           for st in steps]).mean()))
-        print(json.dumps({"ckpt": ck, "n": len(prompts), "rkl_mean": sum(rkl) / len(rkl),
-                          "keys_per_row": sum(keys) / len(keys), "rkl_per_prompt": [round(x, 4) for x in rkl]}),
-              flush=True)
+            keys.append(
+                float(
+                    torch.stack(
+                        [
+                            torch.stack([m.sum().float() / m.shape[0] for m in st[1:]]).mean()
+                            for st in steps
+                        ]
+                    ).mean()
+                )
+            )
+        print(
+            json.dumps(
+                {
+                    "ckpt": ck,
+                    "n": len(prompts),
+                    "rkl_mean": sum(rkl) / len(rkl),
+                    "keys_per_row": sum(keys) / len(keys),
+                    "rkl_per_prompt": [round(x, 4) for x in rkl],
+                }
+            ),
+            flush=True,
+        )
         del model
         torch.cuda.empty_cache()
 

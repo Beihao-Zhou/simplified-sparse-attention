@@ -28,30 +28,49 @@ from gist_utils import Global_data, add_gist_tokens
 
 
 def parse_args(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--model", default="Qwen/Qwen2.5-0.5B-Instruct")
     ap.add_argument("--data", required=True)
     ap.add_argument("--heldout", required=True)
-    ap.add_argument("--heldout_long", default=None,
-                    help="rows for eval lengths above 8192 (the last --eval_rows rows are used)")
+    ap.add_argument(
+        "--heldout_long",
+        default=None,
+        help="rows for eval lengths above 8192 (the last --eval_rows rows are used)",
+    )
     ap.add_argument("--out", required=True)
     ap.add_argument("--lora", choices=["gist", "gist_kv", "all"], default="gist")
     ap.add_argument("--r", type=int, default=32)
-    ap.add_argument("--pairs", nargs="+", default=["g1:raw", "hier:g1"],
-                    help="student:teacher mask pairs (hier, g1, raw)")
+    ap.add_argument(
+        "--pairs",
+        nargs="+",
+        default=["g1:raw", "hier:g1"],
+        help="student:teacher mask pairs (hier, g1, raw)",
+    )
     ap.add_argument("--down", default="hier", help="mask whose output goes to the next layer")
     ap.add_argument("--lambda_ntp", type=float, default=0.0)
-    ap.add_argument("--beta", action="store_true", help="per-summary mass bias (gist_lora.SummaryBias)")
+    ap.add_argument(
+        "--beta", action="store_true", help="per-summary mass bias (gist_lora.SummaryBias)"
+    )
     ap.add_argument("--lambda_route", type=float, default=0.0)
     ap.add_argument("--route_rows", type=int, default=32, help="sampled query rows per sequence")
     ap.add_argument("--per_level", action="store_true", help="one gist LoRA per summary level")
-    ap.add_argument("--phase2_at", type=int, default=0,
-                    help="staged training: from this step use --phase2_pairs / --phase2_down")
+    ap.add_argument(
+        "--phase2_at",
+        type=int,
+        default=0,
+        help="staged training: from this step use --phase2_pairs / --phase2_down",
+    )
     ap.add_argument("--phase2_pairs", nargs="+", default=["hier:g1"])
     ap.add_argument("--phase2_down", default="hier")
-    ap.add_argument("--freeze_level0", action="store_true", help="freeze level-0 adapters in phase 2")
+    ap.add_argument(
+        "--freeze_level0", action="store_true", help="freeze level-0 adapters in phase 2"
+    )
     ap.add_argument("--seq_len", type=int, default=8192)
-    ap.add_argument("--batch", type=int, default=8, help="sequences per optimizer step (accumulated)")
+    ap.add_argument(
+        "--batch", type=int, default=8, help="sequences per optimizer step (accumulated)"
+    )
     ap.add_argument("--steps", type=int, default=500)
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--warmup", type=int, default=25)
@@ -59,14 +78,24 @@ def parse_args(argv=None):
     ap.add_argument("--eval_rows", type=int, default=16)
     ap.add_argument("--eval_len", type=int, nargs="+", default=[8192])
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--init_from", default=None,
-                    help="adapters.pt to start from (e.g. phase 1 of a staged run in a fresh process)")
-    ap.add_argument("--start_step", type=int, default=0,
-                    help="first step is start_step + 1; the LR schedule continues from there")
+    ap.add_argument(
+        "--init_from",
+        default=None,
+        help="adapters.pt to start from (e.g. phase 1 of a staged run in a fresh process)",
+    )
+    ap.add_argument(
+        "--start_step",
+        type=int,
+        default=0,
+        help="first step is start_step + 1; the LR schedule continues from there",
+    )
     ap.add_argument("--stop_at", type=int, default=0, help="stop (and save) after this step")
-    ap.add_argument("--eval_only", default=None,
-                    help="adapters.pt to evaluate (all --eval_len) instead of training; a fresh "
-                         "process per run keeps long-eval graphs apart from training graphs")
+    ap.add_argument(
+        "--eval_only",
+        default=None,
+        help="adapters.pt to evaluate (all --eval_len) instead of training; a fresh "
+        "process per run keeps long-eval graphs apart from training graphs",
+    )
     ap.add_argument("--sink", type=int, default=3)
     return ap.parse_args(argv)
 
@@ -82,9 +111,13 @@ def setup_globals(tok, gist_ids, args):
 
 def stage1_config(args, pairs=None, down=None):
     pairs = [tuple(p.split(":")) for p in (args.pairs if pairs is None else pairs)]
-    return {"pairs": pairs, "down": down or args.down, "lambda_ntp": args.lambda_ntp,
-            "route_rows": args.route_rows if args.lambda_route > 0 else 0,
-            "weights": {"route": args.lambda_route}}
+    return {
+        "pairs": pairs,
+        "down": down or args.down,
+        "lambda_ntp": args.lambda_ntp,
+        "route_rows": args.route_rows if args.lambda_route > 0 else 0,
+        "weights": {"route": args.lambda_route},
+    }
 
 
 def batches(ds, seq_len, seed):
@@ -113,11 +146,13 @@ def suffix_kl(model, teacher, rows, seq_len, args, down):
             ids = torch.tensor([r["input_ids"][:seq_len]], device="cuda")
             raw_mask = ~torch.isin(ids[0], gist.to(ids.device))
             raw = ids[0][raw_mask][None]
-            hs = model.model(input_ids=ids, attention_mask=torch.ones_like(ids)).last_hidden_state[0][raw_mask]
+            hs = model.model(input_ids=ids, attention_mask=torch.ones_like(ids)).last_hidden_state[
+                0
+            ][raw_mask]
             ht = teacher.model(input_ids=raw).last_hidden_state[0]
             for s in range(args.sink, ht.shape[0], 1024):
-                ls = F.log_softmax(teacher.lm_head(hs[s:s + 1024]).float(), -1)
-                lt = F.log_softmax(teacher.lm_head(ht[s:s + 1024]).float(), -1)
+                ls = F.log_softmax(teacher.lm_head(hs[s : s + 1024]).float(), -1)
+                lt = F.log_softmax(teacher.lm_head(ht[s : s + 1024]).float(), -1)
                 tot += float((ls.exp() * (ls - lt)).sum())
                 n += ls.shape[0]
     finally:
@@ -133,13 +168,15 @@ def beta_stats(model):
     u, spread = [], []
     for layer in model.model.layers:
         attn = layer.self_attn
-        if getattr(attn, "summary_bias", None) is None:   # layer 0 has none
+        if getattr(attn, "summary_bias", None) is None:  # layer 0 has none
             continue
         u.append(attn.summary_bias.u.norm(dim=(1, 2)))
         x, lv = getattr(attn, "_bias_x", None), Global_data.lora_row_level
         if x is not None and lv is not None and x.shape[:2] == lv.shape:
-            beta = attn.summary_bias(x, lv)                            # [B, H_kv, T]
-            spread.append(torch.stack([beta.transpose(1, 2)[lv == l].std() for l in range(u[-1].numel())]))
+            beta = attn.summary_bias(x, lv)  # [B, H_kv, T]
+            spread.append(
+                torch.stack([beta.transpose(1, 2)[lv == l].std() for l in range(u[-1].numel())])
+            )
     out = {"u_norm": torch.stack(u).mean(0).tolist()}
     if spread:
         out["beta_std"] = torch.stack(spread).mean(0).tolist()
@@ -174,7 +211,8 @@ def main(argv=None):
     tok = AutoTokenizer.from_pretrained(args.model)
     teacher = Qwen2ForCausalLM.from_pretrained(args.model, dtype=torch.bfloat16).cuda().eval()
     model = GistQwen2ForCausalLM.from_pretrained(
-        args.model, dtype=torch.bfloat16, attn_implementation=gist_flex_attention.GIST_FLEX).cuda()
+        args.model, dtype=torch.bfloat16, attn_implementation=gist_flex_attention.GIST_FLEX
+    ).cuda()
     gist_ids = add_gist_tokens(tok, model, num_levels=2)
     setup_globals(tok, gist_ids, args)
     groups = apply_lora(model, args.lora, r=args.r, per_level=args.per_level)
@@ -190,10 +228,20 @@ def main(argv=None):
     model.config.use_cache = False
     model.train()
     params = [p for k in ("lora_qo", "lora_kv", "embed", "beta") for p in groups[k]]
-    opt = torch.optim.AdamW([{"params": groups["lora_qo"] + groups["lora_kv"]},
-                             {"params": groups["embed"] + groups["beta"]}], lr=args.lr, weight_decay=0.0)
-    sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: min(1.0, (s + 1) / args.warmup) *
-                                              0.5 * (1 + math.cos(math.pi * min(s, args.steps) / args.steps)))
+    opt = torch.optim.AdamW(
+        [
+            {"params": groups["lora_qo"] + groups["lora_kv"]},
+            {"params": groups["embed"] + groups["beta"]},
+        ],
+        lr=args.lr,
+        weight_decay=0.0,
+    )
+    sched = torch.optim.lr_scheduler.LambdaLR(
+        opt,
+        lambda s: min(1.0, (s + 1) / args.warmup)
+        * 0.5
+        * (1 + math.cos(math.pi * min(s, args.steps) / args.steps)),
+    )
     Global_data.stage1 = stage1_config(args)
     train = datasets.load_from_disk(os.path.expanduser(args.data))
     held = datasets.load_from_disk(os.path.expanduser(args.heldout)).select(range(args.eval_rows))
@@ -207,23 +255,36 @@ def main(argv=None):
 
     def evaluate(step):
         down = Global_data.stage1["down"]
-        rec = {"step": step, "down": down,
-               **{f"suffix_kl_{L}": suffix_kl(model, teacher, held if L <= 8192 else held_long, L, args, down)
-                  for L in args.eval_len}}
+        rec = {
+            "step": step,
+            "down": down,
+            **{
+                f"suffix_kl_{L}": suffix_kl(
+                    model, teacher, held if L <= 8192 else held_long, L, args, down
+                )
+                for L in args.eval_len
+            },
+        }
         if groups["beta"]:
             rec["beta"] = beta_stats(model)
         print(json.dumps(rec), flush=True)
-        log.write(json.dumps(rec) + "\n"); log.flush()
+        log.write(json.dumps(rec) + "\n")
+        log.flush()
 
     if args.eval_only:
-        Global_data.stage1 = stage1_config(args, args.phase2_pairs if args.phase2_at else None,
-                                           args.phase2_down if args.phase2_at else None)
+        Global_data.stage1 = stage1_config(
+            args,
+            args.phase2_pairs if args.phase2_at else None,
+            args.phase2_down if args.phase2_at else None,
+        )
         log = open(os.path.join(args.out, "eval.jsonl"), "a")
         evaluate("final")
         return
     if args.start_step:
         for _ in range(args.start_step):
             sched.step()
+        if args.phase2_at and args.start_step >= args.phase2_at:
+            Global_data.stage1 = stage1_config(args, args.phase2_pairs, args.phase2_down)
         if args.freeze_level0:
             for p in groups["level0"]:
                 p.requires_grad_(False)
@@ -236,29 +297,51 @@ def main(argv=None):
                 for p in groups["level0"]:
                     p.requires_grad_(False)
                     p.grad = None
-            print(f"phase 2 from step {step}: {Global_data.stage1['pairs']} down={args.phase2_down}", flush=True)
+            print(
+                f"phase 2 from step {step}: {Global_data.stage1['pairs']} down={args.phase2_down}",
+                flush=True,
+            )
         t0 = time.time()
         agg = {}
         for _ in range(accum):
             ids, labels = next(it)
-            out = model(input_ids=ids.cuda(), attention_mask=torch.ones_like(ids).cuda(), labels=labels.cuda())
+            out = model(
+                input_ids=ids.cuda(),
+                attention_mask=torch.ones_like(ids).cuda(),
+                labels=labels.cuda(),
+            )
             (out.loss / accum).backward()
             for k, v in Global_data.stage1["last"].items():
                 agg[k] = agg.get(k, 0.0) + v / accum
         gn = group_grad_norms(model)
         torch.nn.utils.clip_grad_norm_(params, 1.0)
-        opt.step(); sched.step(); opt.zero_grad(set_to_none=True)
-        rec = {"step": step, "lr": sched.get_last_lr()[0], "sec": round(time.time() - t0, 2),
-               "mem_gb": round(torch.cuda.max_memory_allocated() / 2**30, 2), **agg}
+        opt.step()
+        sched.step()
+        opt.zero_grad(set_to_none=True)
+        rec = {
+            "step": step,
+            "lr": sched.get_last_lr()[0],
+            "sec": round(time.time() - t0, 2),
+            "mem_gb": round(torch.cuda.max_memory_allocated() / 2**30, 2),
+            **agg,
+        }
         if step % 10 == 0 or step == 1:
             rec["grad"] = gn
             print(json.dumps({k: v for k, v in rec.items() if k != "grad"}), flush=True)
-        log.write(json.dumps(rec) + "\n"); log.flush()
+        log.write(json.dumps(rec) + "\n")
+        log.flush()
         if step % args.eval_every == 0 or step == last:
             evaluate(step)
-    sd = {n: p.detach().cpu() for n, p in model.named_parameters() if "lora_" in n or "summary_bias" in n}
+    sd = {
+        n: p.detach().cpu()
+        for n, p in model.named_parameters()
+        if "lora_" in n or "summary_bias" in n
+    }
     sd["gist_embed"] = model.get_input_embeddings().weight.detach()[gist_ids].cpu()
-    torch.save({"args": vars(args), "state": sd, "gist_ids": gist_ids}, os.path.join(args.out, "adapters.pt"))
+    torch.save(
+        {"args": vars(args), "state": sd, "gist_ids": gist_ids},
+        os.path.join(args.out, "adapters.pt"),
+    )
     print("saved", os.path.join(args.out, "adapters.pt"), flush=True)
 
 

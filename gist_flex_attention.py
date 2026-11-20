@@ -92,7 +92,8 @@ def prepare_gist_flex(
         # Stage-1 teacher masks share the features and key order; loss rows are raw,
         # non-pad tokens past the sink.
         B, T = input_ids.shape
-        names = {n for pair in Global_data.stage1["pairs"] for n in pair} | {Global_data.stage1["down"]}
+        st1 = Global_data.stage1
+        names = {n for pair in st1["pairs"] for n in pair} | {st1["down"]}
         out["gist_teacher_masks"] = {
             n: make_block_mask(make_teacher_mask_mod(f, n, kv_perm=perm), B, T, block_size,
                                str(input_ids.device), input_ids.is_cuda)
@@ -180,7 +181,8 @@ def _stage1_routing(module, query, key, beta, input_ids, rows, scaling, st):
     k = repeat_kv(key, hpg)
     for b in range(query.shape[0]):
         cand = torch.nonzero(rows[b]).flatten()
-        pick = cand[torch.randperm(cand.numel(), device=cand.device)[:st["route_rows"]]].sort().values
+        perm = torch.randperm(cand.numel(), device=cand.device)[: st["route_rows"]]
+        pick = cand[perm].sort().values
         bt = None if beta is None else beta[b].repeat_interleave(hpg, 0)
         st["losses"].setdefault("route", []).append(routing_kl(
             query[b][:, pick], pick, k[b], input_ids[b], Global_data.gist_token_id, scaling, bt))

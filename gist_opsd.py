@@ -29,9 +29,12 @@ from src.data.gist import make_hierarchical_gist_mask_greedy
 
 def prefill_gist_mask(ctx: torch.Tensor) -> torch.Tensor:
     return make_hierarchical_gist_mask_greedy(
-        inputs=ctx, gist_token=Global_data.gist_token_id, chunk_size=Global_data.chunk_size[0],
+        inputs=ctx,
+        gist_token=Global_data.gist_token_id,
+        chunk_size=Global_data.chunk_size[0],
         attention_sink_size=Global_data.sink_size,
-        num_previous_chunks=Global_data.num_previous_chunks, pad_token=Global_data.pad_token_id,
+        num_previous_chunks=Global_data.num_previous_chunks,
+        pad_token=Global_data.pad_token_id,
     ).to(ctx.device)
 
 
@@ -84,8 +87,13 @@ def rollout(model, ctx: torch.Tensor, n_new: int, vocab: int, generator=None):
         attn = torch.cat([attn, attn.new_ones(1, 1)], dim=-1)
         rec: List[torch.Tensor] = []
         with _record_sdpa(rec):
-            out = model(input_ids=y.view(1, 1), attention_mask=attn, attention_mask_gist=row,
-                        past_key_values=past, use_cache=True)
+            out = model(
+                input_ids=y.view(1, 1),
+                attention_mask=attn,
+                attention_mask_gist=row,
+                past_key_values=past,
+                use_cache=True,
+            )
         assert len(rec) == model.config.num_hidden_layers, len(rec)
         steps.append(rec)
         past = out.past_key_values
@@ -99,11 +107,18 @@ def teacher_logprobs(plain, ctx: torch.Tensor, y: torch.Tensor, vocab: int) -> t
     gist = torch.tensor(Global_data.gist_token_id, device=ctx.device)
     raw = ctx[0][~torch.isin(ctx[0], gist)]
     seq = torch.cat([raw, y[:-1]])[None]
-    return _logprobs(plain(input_ids=seq).logits[0, raw.numel() - 1:], vocab)
+    return _logprobs(plain(input_ids=seq).logits[0, raw.numel() - 1 :], vocab)
 
 
-def replay(model, ctx: torch.Tensor, y: torch.Tensor, steps, vocab: int,
-           route: bool = False, probe: bool = False):
+def replay(
+    model,
+    ctx: torch.Tensor,
+    y: torch.Tensor,
+    steps,
+    vocab: int,
+    route: bool = False,
+    probe: bool = False,
+):
     """Recompute the rollout's distributions with grad, following its recorded selections.
 
     Returns (logprobs [n, vocab], state). With route=True, state["route"] holds the mean
@@ -112,8 +127,12 @@ def replay(model, ctx: torch.Tensor, y: torch.Tensor, steps, vocab: int,
     state["masks"][l] its visibility [1, H, n-1, K].
     """
     n, Tc = y.numel(), ctx.shape[1]
-    out = model(input_ids=ctx, attention_mask=torch.ones_like(ctx),
-                attention_mask_gist=prefill_gist_mask(ctx), use_cache=True)
+    out = model(
+        input_ids=ctx,
+        attention_mask=torch.ones_like(ctx),
+        attention_mask_gist=prefill_gist_mask(ctx),
+        use_cache=True,
+    )
     first = _logprobs(out.logits[0, -1:], vocab)
     state = {"route": [], "probe": {}, "masks": {}}
     if n == 1:
@@ -124,17 +143,28 @@ def replay(model, ctx: torch.Tensor, y: torch.Tensor, steps, vocab: int,
         h = steps[0][l].shape[0]
         m = torch.zeros(1, h, n - 1, K, dtype=torch.bool, device=ctx.device)
         for j in range(n - 1):
-            m[0, :, j, :Tc + j + 1] = steps[j][l]
+            m[0, :, j, : Tc + j + 1] = steps[j][l]
         masks.append(m)
     seq_ids = torch.cat([ctx[0], y[:-1]])
     pos = Global_data.last_pos.reshape(-1)[-1] + 1 + torch.arange(n - 1, device=ctx.device)
     state["masks"] = masks
-    Global_data.opsd_replay = {"masks": masks, "ids": seq_ids, "route_on": route,
-                               "probe_on": probe, "route": state["route"], "probe": state["probe"]}
+    Global_data.opsd_replay = {
+        "masks": masks,
+        "ids": seq_ids,
+        "route_on": route,
+        "probe_on": probe,
+        "route": state["route"],
+        "probe": state["probe"],
+    }
     try:
-        out2 = model(input_ids=y[:-1][None], attention_mask=torch.ones(1, K, dtype=ctx.dtype, device=ctx.device),
-                     attention_mask_gist=masks[0], past_key_values=out.past_key_values,
-                     position_ids=pos[None], use_cache=True)
+        out2 = model(
+            input_ids=y[:-1][None],
+            attention_mask=torch.ones(1, K, dtype=ctx.dtype, device=ctx.device),
+            attention_mask_gist=masks[0],
+            past_key_values=out.past_key_values,
+            position_ids=pos[None],
+            use_cache=True,
+        )
     finally:
         Global_data.opsd_replay = None
     lps = torch.cat([first, _logprobs(out2.logits[0], vocab)])
@@ -148,18 +178,20 @@ def replay_attention(module, query, key, value, scaling):
     from gist_qwen2 import repeat_kv
 
     st = Global_data.opsd_replay
-    vis = st["masks"][module.layer_idx]                             # [1, H|1, R, K]
+    vis = st["masks"][module.layer_idx]  # [1, H|1, R, K]
     if st["probe_on"]:
         key = key.clone()
         key.retain_grad()
         st["probe"][module.layer_idx] = key
     k = repeat_kv(key, module.num_key_value_groups)
     v = repeat_kv(value, module.num_key_value_groups)
-    bias = torch.zeros(vis.shape, dtype=query.dtype, device=query.device).masked_fill(~vis, float("-inf"))
+    bias = torch.zeros(vis.shape, dtype=query.dtype, device=query.device).masked_fill(
+        ~vis, float("-inf")
+    )
     beta = None
     if getattr(module, "summary_bias", None) is not None:
         # beta of the prefix from the replayed prefill; generated (raw) tokens have none.
-        pre = module._beta_cache                                            # [1, H_kv, Tc]
+        pre = module._beta_cache  # [1, H_kv, Tc]
         beta = torch.cat([pre, pre.new_zeros(*pre.shape[:2], k.shape[2] - pre.shape[2])], dim=2)
         beta = beta.repeat_interleave(module.num_key_value_groups, dim=1)  # [1, H, K]
         bias = bias + beta[:, :, None, :].to(bias.dtype)
@@ -167,9 +199,17 @@ def replay_attention(module, query, key, value, scaling):
     if st["route_on"]:
         K = k.shape[2]
         q_pos = torch.arange(K - query.shape[2], K, device=query.device)
-        st["route"].append(routing_kl(query[0], q_pos, k[0], st["ids"][:K],
-                                      Global_data.gist_token_id, scaling,
-                                      None if beta is None else beta[0]))
+        st["route"].append(
+            routing_kl(
+                query[0],
+                q_pos,
+                k[0],
+                st["ids"][:K],
+                Global_data.gist_token_id,
+                scaling,
+                None if beta is None else beta[0],
+            )
+        )
     return out.transpose(1, 2).contiguous(), None
 
 

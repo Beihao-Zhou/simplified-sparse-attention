@@ -18,8 +18,13 @@ GIST_IDS = [1000, 1001]
 
 def _models():
     cfg = Qwen2Config(
-        vocab_size=1100, hidden_size=64, intermediate_size=128, num_hidden_layers=3,
-        num_attention_heads=4, num_key_value_heads=2, max_position_embeddings=4096,
+        vocab_size=1100,
+        hidden_size=64,
+        intermediate_size=128,
+        num_hidden_layers=3,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        max_position_embeddings=4096,
     )
     cfg._attn_implementation = "sdpa"
     torch.manual_seed(0)
@@ -43,11 +48,18 @@ def _student_logits(model, toks, src, summaries_visible):
     raw_key = (src >= 0)[None, :].expand(T, T)
     allowed = causal & (raw_key | torch.eye(T, dtype=torch.bool) | summaries_visible)
     saved = (Global_data.gist_token_id, Global_data.chunk_size, Global_data.train_attn)
-    Global_data.gist_token_id, Global_data.chunk_size, Global_data.train_attn = GIST_IDS, [4, 4], "dense"
+    Global_data.gist_token_id, Global_data.chunk_size, Global_data.train_attn = (
+        GIST_IDS,
+        [4, 4],
+        "dense",
+    )
     try:
         with torch.no_grad():
-            out = model(input_ids=toks, attention_mask=torch.ones_like(toks),
-                        attention_mask_gist=allowed[None, None])
+            out = model(
+                input_ids=toks,
+                attention_mask=torch.ones_like(toks),
+                attention_mask_gist=allowed[None, None],
+            )
     finally:
         Global_data.gist_token_id, Global_data.chunk_size, Global_data.train_attn = saved
     return out.logits[0, src >= 0]

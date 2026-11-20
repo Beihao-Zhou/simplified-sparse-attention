@@ -37,8 +37,12 @@ def _cache(seq):
     c1 = torch.where(is1, is1.cumsum(1) - 1, is1.cumsum(1))
     pos0 = torch.nonzero(is0[0]).flatten()[None]
     return SimpleNamespace(
-        num_levels=2, Gmax=[int(is0.sum()), int(is1.sum())], is_gist_full=is0 | is1,
-        chunk_ids=[c0, c1], parent_chunk_ids=[c1.gather(1, pos0), None], pos0=pos0,
+        num_levels=2,
+        Gmax=[int(is0.sum()), int(is1.sum())],
+        is_gist_full=is0 | is1,
+        chunk_ids=[c0, c1],
+        parent_chunk_ids=[c1.gather(1, pos0), None],
+        pos0=pos0,
         pos1=torch.nonzero(is1[0]).flatten()[None],
     )
 
@@ -60,28 +64,31 @@ def test_record_decode_call(tmp_path, monkeypatch):
     torch.manual_seed(0)
     query = torch.randn(1, H, 1, d)
     key = torch.randn(1, num_kv, k_len, d)
-    K_rep = key.repeat_interleave(H // num_kv, dim=1)                 # [1, H, k_len, d]
-    cache.K_gist_bf16_T = [K_rep[:, :, cache.pos0[0]].transpose(2, 3),
-                           K_rep[:, :, cache.pos1[0]].transpose(2, 3)]
+    K_rep = key.repeat_interleave(H // num_kv, dim=1)  # [1, H, k_len, d]
+    cache.K_gist_bf16_T = [
+        K_rep[:, :, cache.pos0[0]].transpose(2, 3),
+        K_rep[:, :, cache.pos1[0]].transpose(2, 3),
+    ]
     meta = {"task": "t", "sample": 0, "calls": {}, "bucket": "<8K", "answer0": [2, 4]}
     module = SimpleNamespace(layer_idx=1)
 
     for _ in range(2):  # second call is over the step limit and writes nothing
-        record_decode_call(str(tmp_path), module, query, key, cache, [3, 3], d ** -0.5, meta)
+        record_decode_call(str(tmp_path), module, query, key, cache, [3, 3], d**-0.5, meta)
     files = list(tmp_path.glob("*.npz"))
     assert len(files) == 1
     r = np.load(files[0])
     assert r["s0"].shape == (H, 4) and r["s1"].shape == (H, 2)
     assert r["parent0"].tolist() == [0, 0, 1, 1]
-    assert r["answer0"].tolist() == [2]                   # chunk 4 is the uncompressed tail
-    assert int(r["k0"]) == 1                              # min(top_k, max(1, G0 // 4))
+    assert r["answer0"].tolist() == [2]  # chunk 4 is the uncompressed tail
+    assert int(r["k0"]) == 1  # min(top_k, max(1, G0 // 4))
 
     # oracle mass: softmax over raw keys only, summed over the 4 compressed chunks
     q = query[0, :, 0]
-    logits = torch.einsum("hd,hkd->hk", q, K_rep[0]) * d ** -0.5
+    logits = torch.einsum("hd,hkd->hk", q, K_rep[0]) * d**-0.5
     raw = ~cache.is_gist_full[0]
     p = logits.masked_fill(~raw, float("-inf")).softmax(-1)
     tail = raw & (cache.chunk_ids[0][0] == 4)
     np.testing.assert_allclose(r["m0"].sum(1), 1 - p[:, tail].sum(1).numpy(), rtol=1e-5)
-    np.testing.assert_allclose(r["s0"][:, 0], (q * K_rep[0, :, cache.pos0[0, 0]]).sum(-1).numpy(),
-                               rtol=1e-5)
+    np.testing.assert_allclose(
+        r["s0"][:, 0], (q * K_rep[0, :, cache.pos0[0, 0]]).sum(-1).numpy(), rtol=1e-5
+    )
