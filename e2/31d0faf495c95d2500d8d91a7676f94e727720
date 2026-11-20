@@ -1,0 +1,40 @@
+experiments/opsd_eval.py
+  s_466735a13fa48a::t_9ca38a9fe6a6fc 25,36,63-67
+attn_candidate.py
+  s_466735a13fa48a::t_2aae6499ef317b 1155-1156,1158,1160-1181,1205-1206
+  s_466735a13fa48a::t_fd0697afb8b034 1159
+  s_466735a13fa48a::t_55f3a349d9aec4 1157
+tests/test_gist_opsd.py
+  s_466735a13fa48a::t_817ad8448774d7 138-186
+gist_utils.py
+  s_466735a13fa48a::t_55f3a349d9aec4 51-53
+gist_opsd.py
+  s_466735a13fa48a::t_167cdb21735ff3 28-29
+  s_466735a13fa48a::t_2bf64f27f23e1e 43-72,106-113,115-166,171-173,188,234-236,259-260,262-263,270-271,274-275
+gist_lora.py
+  s_466735a13fa48a::t_2aae6499ef317b 162-163,168-173,175-178
+experiments/task_eval.py
+  s_466735a13fa48a::t_9ca38a9fe6a6fc 94,140-148
+gist_opsd_trainer.py
+  s_466735a13fa48a::t_9ca38a9fe6a6fc 73-78,106-110,152-153,174-176,191-192,194
+gist_qwen2.py
+  s_466735a13fa48a::t_55f3a349d9aec4 1333-1338
+gist_llama.py
+  s_466735a13fa48a::t_55f3a349d9aec4 963-968
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "e231d0faf495c95d2500d8d91a7676f94e727720",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
