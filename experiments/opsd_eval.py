@@ -22,7 +22,7 @@ import torch  # noqa: E402
 from transformers import Qwen2ForCausalLM  # noqa: E402
 
 import gist_opsd  # noqa: E402
-from gist_opsd_trainer import load_stage1  # noqa: E402
+from gist_opsd_trainer import load_stage1, regist  # noqa: E402
 
 
 def main():
@@ -43,7 +43,7 @@ def main():
         r = rows[i]
         start = next(j for j, l in enumerate(r["labels"]) if l != -100)
         if start >= args.ctx_len:
-            prompts.append(r["input_ids"][: args.ctx_len])
+            prompts.append(r["input_ids"])
         if len(prompts) == args.n:
             break
     teacher = (
@@ -59,7 +59,7 @@ def main():
         gen = torch.Generator(device=dev).manual_seed(0)
         rkl, fkl, agree, keys = [], [], [], []
         for p in prompts:
-            ctx = torch.tensor([p], device=dev)
+            ctx = torch.tensor([regist(p)[: args.ctx_len]], device=dev)
             y, lp, steps = gist_opsd.rollout(model, ctx, args.n_new, vocab, gen)
             lp_t = gist_opsd.teacher_logprobs(teacher, ctx, y, vocab)
             rkl.append(float(gist_opsd.reverse_kl(lp, lp_t).mean()))

@@ -104,8 +104,14 @@ def build_gist_mask_features(
     )
 
 
-def make_gist_mask_mod(f: GistMaskFeatures, kv_perm: Optional[torch.Tensor] = None):
+def make_gist_mask_mod(
+    f: GistMaskFeatures, kv_perm: Optional[torch.Tensor] = None, max_level: Optional[int] = None
+):
     """Return a FlexAttention mask_mod equivalent to the greedy gist mask AND causal.
+
+    max_level = m (< num_levels) gives the m-level tree: levels >= m are deleted (never
+    keys, and as queries they see only themselves) and level m-1 is never closed. This is
+    the stage-1 teacher g<m>.
 
     If kv_perm [B, T] is given, keys are assumed to be stored in that order (see
     `gist_pool_permutation`): key slot j holds original position kv_perm[b, j]. Key
@@ -128,7 +134,9 @@ def make_gist_mask_mod(f: GistMaskFeatures, kv_perm: Optional[torch.Tensor] = No
     Examples without summary tokens fall back to plain causal attention; padded keys
     are never visible.
     """
-    P, W, top = f.num_previous_chunks, f.raw_window, f.num_levels - 1
+    P, W = f.num_previous_chunks, f.raw_window
+    m = max_level
+    top = f.num_levels - 1 if m is None else m - 1
     level, start, sink_end, has_gist, is_pad = f.level, f.start, f.sink_end, f.has_gist, f.is_pad
     if kv_perm is None:
         k_pos = None
@@ -142,7 +150,10 @@ def make_gist_mask_mod(f: GistMaskFeatures, kv_perm: Optional[torch.Tensor] = No
         k = kv_idx if k_pos is None else k_pos[b, kv_idx]
         lq, lk = level[b, q_idx], k_level[b, kv_idx]
         gist_k = lk >= 0
-        vis = gist_k & (q_idx < k_close[b, kv_idx])                                  # R1
+        if m is None:
+            vis = gist_k & (q_idx < k_close[b, kv_idx])                              # R1
+        else:
+            vis = gist_k & (lk < m) & ((lk == top) | (q_idx < k_close[b, kv_idx]))
         vis = vis | ((lq <= 0) & (lk <= 0) & (k >= start[b, q_idx]))                  # R2
         vis = vis | (gist_k & (lq == lk + 1) & (q_idx == k_par[b, kv_idx]))           # R3
         if P > 0:                                                                     # R4
@@ -153,7 +164,10 @@ def make_gist_mask_mod(f: GistMaskFeatures, kv_perm: Optional[torch.Tensor] = No
         if W > 0:                                                                     # R6
             vis = vis | ((lq < 0) & ~is_pad[b, q_idx] & (lk < 0) & (q_idx - k < W))
         vis = vis | ~has_gist[b]
-        return (k <= q_idx) & vis & ~k_pad[b, kv_idx]
+        out = (k <= q_idx) & vis & ~k_pad[b, kv_idx]
+        if m is not None:
+            out = (out & (lq < m)) | ((lq >= m) & (k == q_idx))
+        return out
 
     return mask_mod
 
@@ -164,9 +178,14 @@ def make_teacher_mask_mod(f: GistMaskFeatures, kind: str, kv_perm: Optional[torc
       raw  every raw key and no summary key: plain causal attention over the raw text
       g1   single-level gist mask: level-0 summaries stay visible once written (no higher
            level closes them), raw keys follow R2/R5/R6, higher-level summaries are not keys
+      g<m> (2 <= m < num_levels) the m-level tree, `make_gist_mask_mod(max_level=m)`
 
     A query always sees itself, so summary rows stay well defined.
     """
+    if kind[:1] == "g" and kind[1:].isdigit() and int(kind[1:]) >= 2:
+        if int(kind[1:]) >= f.num_levels:
+            raise ValueError(f"teacher {kind!r} needs more than {f.num_levels} levels")
+        return make_gist_mask_mod(f, kv_perm, max_level=int(kind[1:]))
     if kind not in ("raw", "g1"):
         raise ValueError(f"unknown teacher mask {kind!r}")
     W = f.raw_window

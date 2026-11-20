@@ -35,22 +35,22 @@ def _models():
     return gist, plain
 
 
-def _gisted(n_raw, seed):
+def _gisted(n_raw, seed, gist_ids=GIST_IDS):
     g = torch.Generator().manual_seed(seed)
     raw = torch.randint(1, 900, (n_raw,), generator=g).tolist()
-    toks, src = insert_gists_with_map(raw, GIST_IDS, chunk_size=4, group=4)
+    toks, src = insert_gists_with_map(raw, gist_ids, chunk_size=4, group=4)
     return torch.tensor([raw]), torch.tensor([toks]), torch.tensor(src)
 
 
-def _student_logits(model, toks, src, summaries_visible):
+def _student_logits(model, toks, src, summaries_visible, gist_ids=GIST_IDS):
     T = toks.shape[1]
     causal = torch.ones(T, T, dtype=torch.bool).tril()
     raw_key = (src >= 0)[None, :].expand(T, T)
     allowed = causal & (raw_key | torch.eye(T, dtype=torch.bool) | summaries_visible)
     saved = (Global_data.gist_token_id, Global_data.chunk_size, Global_data.train_attn)
     Global_data.gist_token_id, Global_data.chunk_size, Global_data.train_attn = (
-        GIST_IDS,
-        [4, 4],
+        gist_ids,
+        [4] * len(gist_ids),
         "dense",
     )
     try:
@@ -82,3 +82,15 @@ def test_visible_summaries_change_the_output():
         ref = plain(input_ids=raw).logits[0]
     diff = (_student_logits(gist, toks, src, True) - ref).abs().max()
     assert diff > 1e-2, diff
+
+
+def test_full_unfold_matches_original_at_four_levels():
+    gist, plain = _models()
+    ids4 = GIST_IDS + [1002, 1003]
+    raw, toks, src = _gisted(n_raw=600, seed=3, gist_ids=ids4)
+    assert (toks == 1003).sum() >= 2
+    with torch.no_grad():
+        ref = plain(input_ids=raw).logits[0]
+    torch.testing.assert_close(
+        _student_logits(gist, toks, src, False, ids4), ref, rtol=1e-4, atol=1e-4
+    )

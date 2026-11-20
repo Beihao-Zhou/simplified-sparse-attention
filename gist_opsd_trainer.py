@@ -22,9 +22,10 @@ import torch
 from transformers import AutoTokenizer, Qwen2ForCausalLM
 
 import gist_opsd
-from gist_lora import apply_lora, apply_summary_bias
+from gist_lora import apply_lora, apply_summary_bias, summary_spans
 from gist_qwen2 import GistQwen2ForCausalLM
 from gist_utils import Global_data, add_gist_tokens
+from src.data.gist_stream import reinsert_gists
 
 
 def load_stage1(path, model_name, device):
@@ -37,17 +38,20 @@ def load_stage1(path, model_name, device):
     model = GistQwen2ForCausalLM.from_pretrained(
         model_name, dtype=torch.float32, attn_implementation="sdpa"
     ).to(device)
-    gist_ids = add_gist_tokens(tok, model, num_levels=2)
+    levels = a.get("levels", 2)
+    gist_ids = add_gist_tokens(tok, model, num_levels=levels)
     assert gist_ids == ck["gist_ids"], (gist_ids, ck["gist_ids"])
     Global_data.gist_token_id = gist_ids
     Global_data.chunk_size, Global_data.sink_size, Global_data.num_previous_chunks = (
-        [4, 4],
+        [4] * levels,
         a["sink"],
         1,
     )
+    # levels 0 and 1 get the adaptive k inside the eager path; higher levels read this
+    Global_data.top_k = [3] * max(3, levels)
     Global_data.pad_token_id, Global_data.train_attn = tok.pad_token_id, "dense"
     groups = apply_lora(model, a["lora"], r=a["r"], per_level=a.get("per_level", False))
-    groups["beta"] = apply_summary_bias(model) if a.get("beta") else []
+    groups["beta"] = apply_summary_bias(model, spans=summary_spans(levels)) if a.get("beta") else []
     state = {k: v for k, v in ck["state"].items() if k != "gist_embed"}
     missing, unexpected = model.load_state_dict(state, strict=False)
     assert not unexpected, unexpected
@@ -57,6 +61,13 @@ def load_stage1(path, model_name, device):
         emb[gist_ids] = ck["state"]["gist_embed"].to(device=device, dtype=emb.dtype)
     model.selective = True
     return tok, vocab, model, groups
+
+
+def regist(ids):
+    """Spike data has 2 levels; an L-level checkpoint needs its prompts re-gisted."""
+    if len(Global_data.gist_token_id) <= 2:
+        return ids
+    return reinsert_gists(ids, Global_data.gist_token_id, 4, 4, sink=Global_data.sink_size)
 
 
 def main(argv=None):
@@ -127,7 +138,7 @@ def main(argv=None):
     for r in rows:
         start = next(j for j, l in enumerate(r["labels"]) if l != -100)
         if start >= args.ctx_len:
-            prompts.append(r["input_ids"][: args.ctx_len])
+            prompts.append(regist(r["input_ids"])[: args.ctx_len])
             conts.append([t for t in r["input_ids"][args.ctx_len :] if t not in gist_set])
     if args.holdout:
         prompts, conts = prompts[: -args.holdout], conts[: -args.holdout]

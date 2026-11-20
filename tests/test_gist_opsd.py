@@ -13,8 +13,9 @@ VOCAB = 1000  # base vocabulary; summary ids sit above it
 GIST_IDS = [1000, 1001]
 
 
-@pytest.fixture
-def setup(monkeypatch):
+@pytest.fixture(params=[2, 3], ids=["L2", "L3"])
+def setup(monkeypatch, request):
+    gist_ids = GIST_IDS + [1002] * (request.param > 2)
     monkeypatch.setenv("ATTN_IMPL", "ref")
     keys = (
         "gist_token_id",
@@ -28,7 +29,8 @@ def setup(monkeypatch):
         "opsd_replay",
     )
     saved = {k: getattr(Global_data, k) for k in keys}
-    Global_data.gist_token_id, Global_data.chunk_size = GIST_IDS, [4, 4]
+    Global_data.gist_token_id, Global_data.chunk_size = gist_ids, [4] * len(gist_ids)
+    Global_data.top_k = [3] * 3
     Global_data.sink_size, Global_data.num_previous_chunks = 3, 1
     Global_data.pad_token_id, Global_data.train_attn = 0, "dense"
     cfg = Qwen2Config(
@@ -48,7 +50,7 @@ def setup(monkeypatch):
     plain.load_state_dict(model.state_dict())
     g = torch.Generator().manual_seed(1)
     raw = torch.randint(1, VOCAB, (240,), generator=g).tolist()
-    ctx = torch.tensor([insert_gists_with_map(raw, GIST_IDS, 4, 4, sink=3)[0]])
+    ctx = torch.tensor([insert_gists_with_map(raw, gist_ids, 4, 4, sink=3)[0]])
     yield model, plain, ctx
     for k, v in saved.items():
         setattr(Global_data, k, v)
@@ -66,7 +68,7 @@ def test_selection_is_sparse_and_replayed(setup):
     """Generated rows see only some summaries; replay uses exactly the recorded keys."""
     model, _, ctx = setup
     y, _, steps = gist_opsd.rollout(model, ctx, 6, VOCAB, torch.Generator().manual_seed(0))
-    is_sum = torch.isin(ctx[0], torch.tensor(GIST_IDS))
+    is_sum = torch.isin(ctx[0], torch.tensor(Global_data.gist_token_id))
     seen = steps[0][1][:, : ctx.shape[1]] & is_sum
     assert 0 < int(seen.any(0).sum()) < int(is_sum.sum())
 
@@ -79,7 +81,7 @@ def test_gradients(setup):
 
     lp_s, st = gist_opsd.replay(model, ctx, y, steps, VOCAB, probe=True)
     gist_opsd.reverse_kl(lp_s, lp_t).mean().backward()
-    is_sum = torch.isin(torch.cat([ctx[0], y[:-1]]), torch.tensor(GIST_IDS))
+    is_sum = torch.isin(torch.cat([ctx[0], y[:-1]]), torch.tensor(Global_data.gist_token_id))
     hpg = model.config.num_attention_heads // model.config.num_key_value_heads
     checked = 0
     for layer, key in st["probe"].items():

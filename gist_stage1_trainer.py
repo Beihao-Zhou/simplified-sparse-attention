@@ -22,9 +22,10 @@ import torch.nn.functional as F
 from transformers import AutoTokenizer, Qwen2ForCausalLM
 
 import gist_flex_attention
-from gist_lora import apply_lora, apply_summary_bias
+from gist_lora import apply_lora, apply_summary_bias, summary_spans
 from gist_qwen2 import GistQwen2ForCausalLM
 from gist_utils import Global_data, add_gist_tokens
+from src.data.gist_stream import reinsert_gists, stream_labels
 
 
 def parse_args(argv=None):
@@ -45,8 +46,9 @@ def parse_args(argv=None):
     ap.add_argument(
         "--pairs",
         nargs="+",
-        default=["g1:raw", "hier:g1"],
-        help="student:teacher mask pairs (hier, g1, raw)",
+        default=None,
+        help="student:teacher mask pairs (hier, g<m>, raw); default: the teacher chain "
+        "g1:raw g2:g1 ... hier:g<L-1>",
     )
     ap.add_argument("--down", default="hier", help="mask whose output goes to the next layer")
     ap.add_argument("--lambda_ntp", type=float, default=0.0)
@@ -97,12 +99,27 @@ def parse_args(argv=None):
         "process per run keeps long-eval graphs apart from training graphs",
     )
     ap.add_argument("--sink", type=int, default=3)
-    return ap.parse_args(argv)
+    ap.add_argument(
+        "--levels",
+        type=int,
+        default=2,
+        help="summary levels L; data gisted with fewer levels is re-gisted on the fly",
+    )
+    args = ap.parse_args(argv)
+    if args.pairs is None:
+        args.pairs = teacher_chain(args.levels)
+    return args
+
+
+def teacher_chain(L):
+    """["g1:raw", "g2:g1", ..., "hier:g<L-1>"]; L = 2 gives the S3 pairs."""
+    names = ["raw"] + [f"g{m}" for m in range(1, L)] + ["hier"]
+    return [f"{s}:{t}" for t, s in zip(names, names[1:])]
 
 
 def setup_globals(tok, gist_ids, args):
     Global_data.gist_token_id = gist_ids
-    Global_data.chunk_size = [4, 4]
+    Global_data.chunk_size = [4] * args.levels
     Global_data.sink_size = args.sink
     Global_data.num_previous_chunks = 1
     Global_data.pad_token_id = tok.pad_token_id
@@ -120,7 +137,14 @@ def stage1_config(args, pairs=None, down=None):
     }
 
 
-def batches(ds, seq_len, seed):
+def row_ids(r, args):
+    """A row's tokens, re-gisted when the run has more levels than the data (2)."""
+    if args.levels <= 2:
+        return r["input_ids"]
+    return reinsert_gists(r["input_ids"], Global_data.gist_token_id, 4, 4, sink=args.sink)
+
+
+def batches(ds, seq_len, seed, args):
     """Endless micro-batches of rows truncated to seq_len (rows shorter are skipped)."""
     g = torch.Generator().manual_seed(seed)
     while True:
@@ -128,7 +152,12 @@ def batches(ds, seq_len, seed):
             r = ds[i]
             if r["length"] < seq_len:
                 continue
-            yield torch.tensor([r["input_ids"][:seq_len]]), torch.tensor([r["labels"][:seq_len]])
+            if args.levels <= 2:
+                ids, labels = r["input_ids"][:seq_len], r["labels"][:seq_len]
+            else:
+                ids = row_ids(r, args)[:seq_len]
+                labels = stream_labels(ids, Global_data.gist_token_id)
+            yield torch.tensor([ids]), torch.tensor([labels])
 
 
 @torch.no_grad()
@@ -143,7 +172,7 @@ def suffix_kl(model, teacher, rows, seq_len, args, down):
         for r in rows:
             if r["length"] < seq_len:
                 continue
-            ids = torch.tensor([r["input_ids"][:seq_len]], device="cuda")
+            ids = torch.tensor([row_ids(r, args)[:seq_len]], device="cuda")
             raw_mask = ~torch.isin(ids[0], gist.to(ids.device))
             raw = ids[0][raw_mask][None]
             hs = model.model(input_ids=ids, attention_mask=torch.ones_like(ids)).last_hidden_state[
@@ -213,10 +242,12 @@ def main(argv=None):
     model = GistQwen2ForCausalLM.from_pretrained(
         args.model, dtype=torch.bfloat16, attn_implementation=gist_flex_attention.GIST_FLEX
     ).cuda()
-    gist_ids = add_gist_tokens(tok, model, num_levels=2)
+    gist_ids = add_gist_tokens(tok, model, num_levels=args.levels)
     setup_globals(tok, gist_ids, args)
     groups = apply_lora(model, args.lora, r=args.r, per_level=args.per_level)
-    groups["beta"] = apply_summary_bias(model) if args.beta else []
+    groups["beta"] = (
+        apply_summary_bias(model, spans=summary_spans(args.levels)) if args.beta else []
+    )
     if args.eval_only or args.init_from:
         ck = torch.load(args.eval_only or args.init_from, map_location="cpu")
         state = {k: v for k, v in ck["state"].items() if k != "gist_embed"}
@@ -249,7 +280,7 @@ def main(argv=None):
     if args.heldout_long:
         hl = datasets.load_from_disk(os.path.expanduser(args.heldout_long))
         held_long = hl.select(range(len(hl) - args.eval_rows, len(hl)))
-    it = batches(train, args.seq_len, args.seed)
+    it = batches(train, args.seq_len, args.seed, args)
     log = open(os.path.join(args.out, "log.jsonl"), "a")
     accum = args.batch  # one sequence per forward
 

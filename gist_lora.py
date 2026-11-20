@@ -82,6 +82,11 @@ def _capturing(module, fn):
     return wrapped
 
 
+def summary_spans(levels: int, chunk: int = 4) -> list:
+    """Raw tokens a level-l summary covers (chunk 4, group 4): [4, 16, 64, ...]."""
+    return [chunk ** (lvl + 1) for lvl in range(levels)]
+
+
 def apply_summary_bias(model, spans=(4, 16)) -> list:
     """Attach a SummaryBias to every attention layer but the first (layer 0 uses plain
     attention at inference and takes no part in selection); returns its parameters.

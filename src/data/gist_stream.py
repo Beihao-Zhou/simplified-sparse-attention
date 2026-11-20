@@ -98,6 +98,16 @@ def insert_gists_by_position(
     return insert_gists_with_map(token_ids, gist_ids, chunk_size, group, sink)[0]
 
 
+def reinsert_gists(
+    token_ids: Sequence[int], gist_ids: Sequence[int], chunk_size: int, group: Groups, sink: int = 0
+) -> List[int]:
+    """Drop every summary in gist_ids and insert them again: an L-level tree from data
+    gisted with fewer levels (whose ids are a prefix of gist_ids)."""
+    drop = set(gist_ids)
+    raw = [t for t in token_ids if t not in drop]
+    return insert_gists_by_position(raw, gist_ids, chunk_size, group, sink)
+
+
 def stream_labels(tokens: Sequence[int], gist_ids: Sequence[int], loss_mask: Optional[Sequence[bool]] = None) -> List[int]:
     """-100 on summary tokens (inserted, never generated); raw tokens are predicted,
     including those right after a gist. loss_mask further restricts raw tokens."""

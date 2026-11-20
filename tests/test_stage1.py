@@ -210,3 +210,42 @@ def test_fold_beta_adds_bias_to_logits():
     ref = (q @ kr.transpose(-1, -2)) * s + beta.repeat_interleave(2, 1)[:, :, None, :]
     got = (q2 @ k2.repeat_interleave(2, 1).transpose(-1, -2)) * s
     torch.testing.assert_close(got, ref, rtol=1e-5, atol=1e-5)
+
+
+def test_teacher_chain_at_four_levels(cfg):
+    """L = 4: the chain g1:raw, g2:g1, g3:g2, hier:g3 gives one positive relMSE per pair,
+    and beta / routing reach every level's summaries."""
+    from gist_lora import apply_summary_bias, summary_spans
+    from gist_stage1_trainer import teacher_chain
+
+    G4 = [1000, 1001, 1002, 1003]
+    Global_data.gist_token_id, Global_data.chunk_size = G4, [4] * 4
+    cfg._attn_implementation = gist_flex_attention.GIST_FLEX
+    Global_data.train_attn = "flex"
+    assert teacher_chain(2) == ["g1:raw", "hier:g1"]
+    pairs = [tuple(p.split(":")) for p in teacher_chain(4)]
+    Global_data.stage1 = {
+        "pairs": pairs,
+        "down": "hier",
+        "lambda_ntp": 0.0,
+        "route_rows": 16,
+        "weights": {"route": 1.0},
+    }
+    torch.manual_seed(0)
+    model = GistQwen2ForCausalLM(cfg).float().train()
+    groups = apply_lora(model, "gist", r=4)
+    bias = apply_summary_bias(model, spans=summary_spans(4))
+    rng = random.Random(0)
+    ids = torch.tensor(
+        [insert_gists_with_map([rng.randrange(1, 900) for _ in range(600)], G4, 4, 4, sink=3)[0]]
+    )
+    assert (ids == G4[3]).sum() >= 2
+    out = model(input_ids=ids, attention_mask=torch.ones_like(ids), labels=ids.clone())
+    last = Global_data.stage1["last"]
+    assert {"g1|raw", "g2|g1", "g3|g2", "hier|g3"} <= set(last)
+    assert all(last[k] > 0 for k in ("g1|raw", "g2|g1", "g3|g2", "hier|g3"))
+    out.loss.backward()
+    assert all(p.grad is not None and p.grad.abs().sum() > 0 for p in groups["lora_kv"][1::2])
+    for sb in bias:
+        if sb.dim() == 2:  # b [levels, num_kv]
+            assert (sb.grad.abs().sum(-1) > 0).all(), sb.grad
