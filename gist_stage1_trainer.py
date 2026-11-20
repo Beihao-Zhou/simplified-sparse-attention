@@ -59,6 +59,11 @@ def parse_args(argv=None):
     ap.add_argument("--eval_rows", type=int, default=16)
     ap.add_argument("--eval_len", type=int, nargs="+", default=[8192])
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--init_from", default=None,
+                    help="adapters.pt to start from (e.g. phase 1 of a staged run in a fresh process)")
+    ap.add_argument("--start_step", type=int, default=0,
+                    help="first step is start_step + 1; the LR schedule continues from there")
+    ap.add_argument("--stop_at", type=int, default=0, help="stop (and save) after this step")
     ap.add_argument("--eval_only", default=None,
                     help="adapters.pt to evaluate (all --eval_len) instead of training; a fresh "
                          "process per run keeps long-eval graphs apart from training graphs")
@@ -174,8 +179,8 @@ def main(argv=None):
     setup_globals(tok, gist_ids, args)
     groups = apply_lora(model, args.lora, r=args.r, per_level=args.per_level)
     groups["beta"] = apply_summary_bias(model) if args.beta else []
-    if args.eval_only:
-        ck = torch.load(args.eval_only, map_location="cpu")
+    if args.eval_only or args.init_from:
+        ck = torch.load(args.eval_only or args.init_from, map_location="cpu")
         state = {k: v for k, v in ck["state"].items() if k != "gist_embed"}
         missing, unexpected = model.load_state_dict(state, strict=False)
         assert not unexpected, unexpected
@@ -216,8 +221,15 @@ def main(argv=None):
         log = open(os.path.join(args.out, "eval.jsonl"), "a")
         evaluate("final")
         return
-    evaluate(0)
-    for step in range(1, args.steps + 1):
+    if args.start_step:
+        for _ in range(args.start_step):
+            sched.step()
+        if args.freeze_level0:
+            for p in groups["level0"]:
+                p.requires_grad_(False)
+    evaluate(args.start_step)
+    last = args.stop_at or args.steps
+    for step in range(args.start_step + 1, last + 1):
         if args.phase2_at and step == args.phase2_at:
             Global_data.stage1 = stage1_config(args, args.phase2_pairs, args.phase2_down)
             if args.freeze_level0:
@@ -242,7 +254,7 @@ def main(argv=None):
             rec["grad"] = gn
             print(json.dumps({k: v for k, v in rec.items() if k != "grad"}), flush=True)
         log.write(json.dumps(rec) + "\n"); log.flush()
-        if step % args.eval_every == 0 or step == args.steps:
+        if step % args.eval_every == 0 or step == last:
             evaluate(step)
     sd = {n: p.detach().cpu() for n, p in model.named_parameters() if "lora_" in n or "summary_bias" in n}
     sd["gist_embed"] = model.get_input_embeddings().weight.detach()[gist_ids].cpu()
