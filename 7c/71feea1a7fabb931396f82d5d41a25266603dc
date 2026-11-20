@@ -1,0 +1,25 @@
+experiments/opsd_eval.py
+  s_466735a13fa48a::t_30ae3ec928f0a2 1-70
+results/s4b.jsonl
+  s_466735a13fa48a::t_a685c34455bfe7 1-150
+gist_opsd_trainer.py
+  s_466735a13fa48a::t_91fa88ad3bde54 32-34,81-82,126-127
+results/spikes.csv
+  s_466735a13fa48a::t_51cf899d465808 53-60
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "7c71feea1a7fabb931396f82d5d41a25266603dc",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
