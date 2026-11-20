@@ -46,7 +46,8 @@ def load_stage1(path, model_name, device):
     assert not unexpected, unexpected
     assert all("lora_" not in k and "summary_bias" not in k for k in missing), missing
     with torch.no_grad():
-        model.get_input_embeddings().weight[gist_ids] = ck["state"]["gist_embed"].to(device)
+        emb = model.get_input_embeddings().weight
+        emb[gist_ids] = ck["state"]["gist_embed"].to(device=device, dtype=emb.dtype)
     model.selective = True
     return tok, vocab, model, groups
 
