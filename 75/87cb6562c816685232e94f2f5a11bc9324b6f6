@@ -1,0 +1,61 @@
+experiments/opsd_mechanism.py
+  s_466735a13fa48a::t_10727fcd2c947f 44-48,60,64-66,70-73,95-108,116-127,132-134,136-137,145-158,160-162,164-168,171-175,178-180,182-186,189-207
+gist_utils.py
+  s_466735a13fa48a::t_1982d81a9bf133 49-50
+tests/test_routing_record.py
+  s_466735a13fa48a::t_10727fcd2c947f 40-45,67-71,76,82-83,87,92-94
+tests/test_teacher_masks.py
+  s_466735a13fa48a::t_10727fcd2c947f 11-13,22-25,31-33,36-38,49-51,56-58,67-69
+tests/test_stage1.py
+  s_466735a13fa48a::t_10727fcd2c947f 20-30,35-43,51-53,72-77,94-98,115,125-129,140,153-159,174-180,202,206
+tests/test_gist_opsd.py
+  s_466735a13fa48a::t_10727fcd2c947f 12,19-29,34-42,70,86-88,103-105
+gist_stage1_trainer.py
+  s_466735a13fa48a::t_10727fcd2c947f 31-33,37-41,45-50,53-55,59-64,67-69,71-73,81-91,93-98,114-120,149-151,154-155,171,176-179,214-215,231-244,258-267,271-272,275-279,300-303,308-312,318-327,331-332,335-339,341-344
+  s_466735a13fa48a::t_1982d81a9bf133 286-287
+experiments/noise_floor.py
+  s_466735a13fa48a::t_10727fcd2c947f 40-41,67-71,96-109,118-123,133-135,141-151
+attn_candidate.py
+  s_466735a13fa48a::t_1982d81a9bf133 1173,1181-1185
+  s_466735a13fa48a::t_4f36e5c25ed982 1187-1189
+experiments/routing_record.py
+  s_466735a13fa48a::t_10727fcd2c947f 32,72,79,93-97,99-100
+  s_466735a13fa48a::t_1982d81a9bf133 69-70
+benchmark/Longbench_exp/longbench_pred.py
+  s_466735a13fa48a::t_1982d81a9bf133 381-385
+gist_opsd_trainer.py
+  s_466735a13fa48a::t_10727fcd2c947f 37-39,43-47,63-65,78-83,97-103,106-111,117,119,123-125,131-133,142-145,148-150,152-161,163-169,171-179
+  s_466735a13fa48a::t_1982d81a9bf133 118,120,146
+tests/test_gist_noise_floor.py
+  s_466735a13fa48a::t_10727fcd2c947f 21-27,51-55,58-62
+gist_lora.py
+  s_466735a13fa48a::t_1982d81a9bf133 87-91,117,167,169-170,176-178
+  s_466735a13fa48a::t_10727fcd2c947f 30-31,33-34,81,97-98,106-108,133-136,149-151,165-166,168,171-174
+gist_opsd.py
+  s_466735a13fa48a::t_10727fcd2c947f 32-34,36-37,90-96,110-121,130-135,146,151-158,160-167,181,188-190,194,202-212
+gist_qwen2.py
+  s_466735a13fa48a::t_4f36e5c25ed982 1582-1584
+  s_466735a13fa48a::t_1982d81a9bf133 1234-1237
+gist_routing.py
+  s_466735a13fa48a::t_10727fcd2c947f 17-25,27,32,36,38,42
+gist_flex_attention.py
+  s_466735a13fa48a::t_4f36e5c25ed982 95-96,184-185
+experiments/opsd_eval.py
+  s_466735a13fa48a::t_10727fcd2c947f 45,48-54,65-86
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "7587cb6562c816685232e94f2f5a11bc9324b6f6",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
