@@ -1330,7 +1330,12 @@ class GistQwen2Model(Qwen2PreTrainedModel):
 
         pos = position_ids + offset
         if input_ids.shape[1] == 1:
-            rope_pos = Global_data.last_pos + 1
+            if Global_data.decode_gists:
+                # A summary decoded at generation time shares the last raw token's position.
+                g = torch.tensor(Global_data.gist_token_id, device=pos.device)
+                rope_pos = Global_data.last_pos + (~torch.isin(input_ids, g)).long()
+            else:
+                rope_pos = Global_data.last_pos + 1
             Global_data.last_pos = rope_pos
         else:
             # Build gist mask (all levels)

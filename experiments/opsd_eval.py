@@ -22,7 +22,7 @@ import torch  # noqa: E402
 from transformers import Qwen2ForCausalLM  # noqa: E402
 
 import gist_opsd  # noqa: E402
-from gist_opsd_trainer import load_stage1, regist  # noqa: E402
+from gist_opsd_trainer import complete, load_stage1, regist  # noqa: E402
 
 
 def main():
@@ -33,6 +33,7 @@ def main():
     ap.add_argument("--n", type=int, default=16)
     ap.add_argument("--ctx_len", type=int, default=2048)
     ap.add_argument("--n_new", type=int, default=64)
+    ap.add_argument("--decode_gists", action="store_true")
     args = ap.parse_args()
     assert os.environ.get("ATTN_IMPL") == "ref"
     torch.backends.cuda.matmul.allow_tf32 = False
@@ -59,8 +60,11 @@ def main():
         gen = torch.Generator(device=dev).manual_seed(0)
         rkl, fkl, agree, keys = [], [], [], []
         for p in prompts:
-            ctx = torch.tensor([regist(p)[: args.ctx_len]], device=dev)
-            y, lp, steps = gist_opsd.rollout(model, ctx, args.n_new, vocab, gen)
+            p = regist(p)[: args.ctx_len]
+            ctx = torch.tensor([complete(p) if args.decode_gists else p], device=dev)
+            y, lp, steps = gist_opsd.rollout(
+                model, ctx, args.n_new, vocab, gen, insert_gists=args.decode_gists
+            )
             lp_t = gist_opsd.teacher_logprobs(teacher, ctx, y, vocab)
             rkl.append(float(gist_opsd.reverse_kl(lp, lp_t).mean()))
             fkl.append(float(gist_opsd.forward_kl(lp, lp_t).mean()))

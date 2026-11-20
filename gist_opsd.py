@@ -25,6 +25,8 @@ import torch.nn.functional as F
 from gist_routing import routing_kl
 from gist_utils import Global_data
 from src.data.gist import make_hierarchical_gist_mask_greedy
+from src.data.gist_flex_mask import build_gist_mask_features, make_gist_mask_mod
+from src.data.gist_stream import OnlineGistInserter
 
 
 def prefill_gist_mask(ctx: torch.Tensor) -> torch.Tensor:
@@ -36,6 +38,36 @@ def prefill_gist_mask(ctx: torch.Tensor) -> torch.Tensor:
         num_previous_chunks=Global_data.num_previous_chunks,
         pad_token=Global_data.pad_token_id,
     ).to(ctx.device)
+
+
+def gist_row(ids: torch.Tensor) -> torch.Tensor:
+    """[1, 1, 1, T] gist-mask row of the last token of ids [1, T] (the prefill mask's row)."""
+    f = build_gist_mask_features(
+        ids,
+        Global_data.gist_token_id,
+        Global_data.chunk_size[0],
+        attention_sink_size=Global_data.sink_size,
+        num_previous_chunks=Global_data.num_previous_chunks,
+        pad_token=Global_data.pad_token_id,
+    )
+    T = ids.shape[1]
+    zero = torch.zeros((), dtype=torch.long, device=ids.device)
+    row = make_gist_mask_mod(f)(zero, zero, zero + T - 1, torch.arange(T, device=ids.device))
+    return row.view(1, 1, 1, T)
+
+
+def _inserter(ctx: torch.Tensor) -> OnlineGistInserter:
+    """Inserter continuing ctx's stream; ctx must be gisted to completion (reinsert_gists)."""
+    gids = Global_data.gist_token_id
+    cs = Global_data.chunk_size
+    ins = OnlineGistInserter(gids, cs[0], cs[1:] or 4, Global_data.sink_size)
+    toks, again = ctx[0].tolist(), []
+    for t in toks:
+        if t not in gids:
+            again += [t] + ins.push(t)
+    if again != toks:
+        raise ValueError("insert_gists needs a context gisted to completion (reinsert_gists)")
+    return ins
 
 
 def _visible(attn_mask: Optional[torch.Tensor], k_len: int, device) -> torch.Tensor:
@@ -71,50 +103,74 @@ def _logprobs(logits: torch.Tensor, vocab: int) -> torch.Tensor:
 
 @torch.no_grad()
 def rollout(
-    model, ctx: torch.Tensor, n_new: int, vocab: int, generator=None, greedy=False, forced=None
+    model,
+    ctx: torch.Tensor,
+    n_new: int,
+    vocab: int,
+    generator=None,
+    greedy=False,
+    forced=None,
+    insert_gists=False,
 ):
-    """Sample n_new tokens at temperature 1 (argmax if greedy; the tokens of `forced` [n_new]
-    if given). Returns (y [n], logprobs [n, vocab], steps) where steps[j][l] is layer l's
-    visible-key mask when y[j] was fed (j < n - 1)."""
-    attn = torch.ones_like(ctx)
-    row = prefill_gist_mask(ctx)
-    out = model(input_ids=ctx, attention_mask=attn, attention_mask_gist=row, use_cache=True)
-    past, row = out.past_key_values, row[:, :, -1:]
-    lps, ys, steps = [_logprobs(out.logits[0, -1], vocab)], [], []
-    for t in range(n_new):
-        if forced is not None:
-            y = forced[t : t + 1]
-        elif greedy:
-            y = lps[-1].argmax().view(1)
-        else:
-            y = torch.multinomial(lps[-1].exp(), 1, generator=generator)
-        ys.append(y)
-        if t == n_new - 1:
-            break
-        row = torch.cat([row, row.new_ones(1, 1, 1, 1)], dim=-1)
-        attn = torch.cat([attn, attn.new_ones(1, 1)], dim=-1)
-        rec: List[torch.Tensor] = []
-        with _record_sdpa(rec):
-            out = model(
-                input_ids=y.view(1, 1),
-                attention_mask=attn,
-                attention_mask_gist=row,
-                past_key_values=past,
-                use_cache=True,
-            )
-        assert len(rec) == model.config.num_hidden_layers, len(rec)
-        steps.append(rec)
-        past = out.past_key_values
-        lps.append(_logprobs(out.logits[0, -1], vocab))
-    return torch.cat(ys), torch.stack(lps), steps
+    """Sample n_new raw tokens at temperature 1 (argmax if greedy; the tokens of `forced`
+    [n_new] if given). With insert_gists, summaries are inserted by the streaming rule as
+    the text grows (fed, never sampled), each decode row is the prefill mask's row, and the
+    generated stream y holds them. Returns (y [n], logprobs [n_raw, vocab], steps) where
+    steps[j][l] is layer l's visible-key mask when y[j] was fed (j < n - 1)."""
+    ins = _inserter(ctx) if insert_gists else None
+    Global_data.decode_gists = insert_gists
+    try:
+        attn = torch.ones_like(ctx)
+        row = prefill_gist_mask(ctx)
+        out = model(input_ids=ctx, attention_mask=attn, attention_mask_gist=row, use_cache=True)
+        past, row = out.past_key_values, row[:, :, -1:]
+        lps, ys, steps, fed = [_logprobs(out.logits[0, -1], vocab)], [], [], []
+        for t in range(n_new):
+            if forced is not None:
+                y = forced[t : t + 1]
+            elif greedy:
+                y = lps[-1].argmax().view(1)
+            else:
+                y = torch.multinomial(lps[-1].exp(), 1, generator=generator)
+            ys.append(y)
+            if t == n_new - 1:
+                break
+            feed = [y] + ([y.new_tensor([g]) for g in ins.push(int(y))] if ins else [])
+            for tok in feed:
+                fed.append(tok)
+                attn = torch.cat([attn, attn.new_ones(1, 1)], dim=-1)
+                if ins:
+                    row = gist_row(torch.cat([ctx[0], torch.cat(fed)])[None]).to(row.dtype)
+                else:
+                    row = torch.cat([row, row.new_ones(1, 1, 1, 1)], dim=-1)
+                rec: List[torch.Tensor] = []
+                with _record_sdpa(rec):
+                    out = model(
+                        input_ids=tok.view(1, 1),
+                        attention_mask=attn,
+                        attention_mask_gist=row,
+                        past_key_values=past,
+                        use_cache=True,
+                    )
+                assert len(rec) == model.config.num_hidden_layers, len(rec)
+                steps.append(rec)
+                past = out.past_key_values
+            lps.append(_logprobs(out.logits[0, -1], vocab))
+    finally:
+        Global_data.decode_gists = False
+    return torch.cat(fed + ys[-1:]), torch.stack(lps), steps
+
+
+def raw_tokens(y: torch.Tensor) -> torch.Tensor:
+    """y without the summaries inserted during decoding."""
+    return y[~torch.isin(y, torch.tensor(Global_data.gist_token_id, device=y.device))]
 
 
 @torch.no_grad()
 def teacher_logprobs(plain, ctx: torch.Tensor, y: torch.Tensor, vocab: int) -> torch.Tensor:
-    """Original model on the raw sequence: [n, vocab] distributions for y."""
-    gist = torch.tensor(Global_data.gist_token_id, device=ctx.device)
-    raw = ctx[0][~torch.isin(ctx[0], gist)]
-    seq = torch.cat([raw, y[:-1]])[None]
+    """Original model on the raw sequence: [n_raw, vocab] distributions for y's raw tokens."""
+    raw = raw_tokens(ctx[0])
+    seq = torch.cat([raw, raw_tokens(y)[:-1]])[None]
     return _logprobs(plain(input_ids=seq).logits[0, raw.numel() - 1 :], vocab)
 
 
@@ -129,7 +185,7 @@ def replay(
 ):
     """Recompute the rollout's distributions with grad, following its recorded selections.
 
-    Returns (logprobs [n, vocab], state). With route=True, state["route"] holds the mean
+    Returns (logprobs [n_raw, vocab], state). With route=True, state["route"] holds the mean
     routing KL over layers >= 1 and generated rows; with probe=True, state["probe"][l]
     is layer l's key tensor as used by the generated rows (retain_grad set), and
     state["masks"][l] its visibility [1, H, n-1, K].
@@ -175,7 +231,9 @@ def replay(
         )
     finally:
         Global_data.opsd_replay = None
-    lps = torch.cat([first, _logprobs(out2.logits[0], vocab)])
+    # rows that predict a raw token (the row before an inserted summary predicts nothing)
+    keep = ~torch.isin(y[1:], torch.tensor(Global_data.gist_token_id, device=y.device))
+    lps = torch.cat([first, _logprobs(out2.logits[0], vocab)[keep]])
     if route:
         state["route"] = torch.stack(state["route"]).mean()
     return lps, state
@@ -198,19 +256,23 @@ def replay_attention(module, query, key, value, scaling):
     )
     beta = None
     if getattr(module, "summary_bias", None) is not None:
-        # beta of the prefix from the replayed prefill; generated (raw) tokens have none.
+        # beta of the prefix from the replayed prefill; of the generated rows from this pass
+        # (0 for raw tokens, b + u . x for summaries inserted during decoding).
         pre = module._beta_cache  # [1, H_kv, Tc]
-        beta = torch.cat([pre, pre.new_zeros(*pre.shape[:2], k.shape[2] - pre.shape[2])], dim=2)
+        gen = module.summary_bias(module._bias_x, Global_data.lora_row_level)
+        beta = torch.cat([pre, gen.to(pre.dtype)], dim=2)
         beta = beta.repeat_interleave(module.num_key_value_groups, dim=1)  # [1, H, K]
         bias = bias + beta[:, :, None, :].to(bias.dtype)
     out = F.scaled_dot_product_attention(query, k, v, attn_mask=bias, scale=scaling)
     if st["route_on"]:
         K = k.shape[2]
         q_pos = torch.arange(K - query.shape[2], K, device=query.device)
+        gids = torch.tensor(Global_data.gist_token_id, device=query.device)
+        raw_q = ~torch.isin(st["ids"][q_pos], gids)  # summary rows do not route
         st["route"].append(
             routing_kl(
-                query[0],
-                q_pos,
+                query[0][:, raw_q],
+                q_pos[raw_q],
                 k[0],
                 st["ids"][:K],
                 Global_data.gist_token_id,

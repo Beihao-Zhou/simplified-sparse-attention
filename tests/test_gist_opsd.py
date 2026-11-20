@@ -135,3 +135,52 @@ def test_forced_and_greedy_rollout(setup):
     torch.testing.assert_close(lp_s, lp_roll, rtol=0, atol=1e-4)
     yg, lpg, _ = gist_opsd.rollout(model, ctx, 6, VOCAB, greedy=True)
     assert torch.equal(yg, lpg.argmax(-1))
+
+
+def _raw_rows(ctx, y):
+    """Row of ctx + y[:-1] that predicts each raw token of y."""
+    g = torch.tensor(Global_data.gist_token_id)
+    Tc = ctx.shape[1]
+    nxt = torch.nonzero(~torch.isin(y[1:], g)).flatten()
+    return torch.cat([torch.tensor([Tc - 1]), Tc + nxt])
+
+
+def test_decode_gists_match_prefill(setup):
+    """Without unfolding, decoding with summaries inserted on the fly reproduces a prefill
+    of the same sequence: the rows follow the prefill mask, summaries share the last raw
+    token's RoPE position, and the next raw token is predicted from the summary's row."""
+    model, _, ctx = setup
+    model.selective = False
+    g = torch.Generator().manual_seed(5)
+    forced = torch.randint(1, VOCAB, (40,), generator=g)
+    y, lps, steps = gist_opsd.rollout(model, ctx, 40, VOCAB, forced=forced, insert_gists=True)
+    assert torch.equal(gist_opsd.raw_tokens(y), forced)
+    assert len(y) > 40 and len(steps) == len(y) - 1  # summaries were inserted and fed
+    full = torch.cat([ctx[0], y[:-1]])[None]
+    with torch.no_grad():
+        out = model(
+            input_ids=full,
+            attention_mask=torch.ones_like(full),
+            attention_mask_gist=gist_opsd.prefill_gist_mask(full),
+        )
+    ref = torch.log_softmax(out.logits[0, _raw_rows(ctx, y), :VOCAB].float(), -1)
+    torch.testing.assert_close(lps, ref, rtol=0, atol=1e-4)
+
+
+def test_replay_with_decode_gists(setup):
+    model, plain, ctx = setup
+    y, lp_roll, steps = gist_opsd.rollout(
+        model, ctx, 24, VOCAB, torch.Generator().manual_seed(0), insert_gists=True
+    )
+    assert len(y) > 24
+    lp_rep, _ = gist_opsd.replay(model, ctx, y, steps, VOCAB, route=True)
+    torch.testing.assert_close(lp_rep, lp_roll, rtol=0, atol=1e-4)
+    assert gist_opsd.teacher_logprobs(plain, ctx, y, VOCAB).shape == lp_roll.shape
+
+
+def test_insert_gists_needs_a_completed_context(setup):
+    model, _, ctx = setup
+    with pytest.raises(ValueError):
+        gist_opsd.rollout(
+            model, ctx[:, :-1] if ctx[0, -1] >= VOCAB else ctx[:, :-2], 2, VOCAB, insert_gists=True
+        )

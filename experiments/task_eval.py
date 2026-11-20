@@ -91,6 +91,7 @@ def main():
     ap.add_argument("--ctx_len", type=int, default=4096)
     ap.add_argument("--n", type=int, default=50)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--decode_gists", action="store_true")
     args = ap.parse_args()
     assert os.environ.get("ATTN_IMPL") == "ref"
     torch.backends.cuda.matmul.allow_tf32 = False
@@ -136,8 +137,15 @@ def main():
                         raw, Global_data.gist_token_id, 4, 4, sink=Global_data.sink_size
                     )[0]
                     ctx = torch.tensor([ids], device=dev)
-                    y, _, _ = gist_opsd.rollout(model, ctx, it["max_new"], vocab, greedy=True)
-                    y = y.tolist()
+                    y, _, _ = gist_opsd.rollout(
+                        model,
+                        ctx,
+                        it["max_new"],
+                        vocab,
+                        greedy=True,
+                        insert_gists=args.decode_gists,
+                    )
+                    y = gist_opsd.raw_tokens(y).tolist()
                 if tok.eos_token_id in y:
                     y = y[: y.index(tok.eos_token_id)]
                 pred = tok.decode(y, skip_special_tokens=True)

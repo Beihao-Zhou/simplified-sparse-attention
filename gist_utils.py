@@ -48,6 +48,9 @@ class Global_data:
     lora_row_level = None
     # Set by gist_lora.apply_lora / apply_summary_bias; the row masks are built only then.
     lora_active = False
+    # Summaries inserted during decoding (gist_opsd.rollout(insert_gists=True)): their RoPE
+    # position and attention follow prefill; off keeps the decode path free of the checks.
+    decode_gists = False
     sep_num = 0
     add_raw = False
     kl_loss = False

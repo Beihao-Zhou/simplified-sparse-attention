@@ -159,28 +159,23 @@ def augment_with_beta(
     q' = [q, 1] and k' = [k, beta / scaling] give attention logits scaling * q.k + beta
     and selection scores q.k + beta / scaling, which rank like the routing scores
     scaling * q.k + beta. v gets a zero coordinate so every head dimension matches; drop
-    the last output coordinate. beta is cached per layer: computed for the whole prefix at
-    prefill, zero for each decoded (raw) token.
+    the last output coordinate. beta is cached per layer and extended by every forward:
+    zero for raw tokens, b + u . x for summaries (including ones decoded at generation).
     """
     T = key.shape[2]
     q_len = query.shape[2]
     cache = getattr(module, "_beta_cache", None)
-    if q_len > 1 or cache is None:
-        x = getattr(module, "_bias_x", None)
-        beta = module.summary_bias(x, Global_data.lora_row_level)  # [B, H_kv, q_len]
-        if T == q_len:  # a fresh prefix
-            cache = beta
-        elif cache is not None and cache.shape[2] + q_len == T:  # a later prefill chunk
-            cache = torch.cat([cache, beta], dim=2)
-        else:
-            raise RuntimeError(
-                f"summary-bias cache out of sync: {T} keys, {q_len} new, cache "
-                f"{None if cache is None else cache.shape[2]}"
-            )
+    x = getattr(module, "_bias_x", None)
+    beta = module.summary_bias(x, Global_data.lora_row_level)  # [B, H_kv, q_len]; 0 on raw rows
+    if T == q_len:  # a fresh prefix
+        cache = beta
+    elif cache is not None and cache.shape[2] + q_len == T:  # a prefill chunk or decode step
+        cache = torch.cat([cache, beta.to(cache.dtype)], dim=2)
     else:
-        if cache.shape[2] + 1 != T:
-            raise RuntimeError(f"summary-bias cache out of sync: {T} keys, cache {cache.shape[2]}")
-        cache = torch.cat([cache, cache.new_zeros(*cache.shape[:2], 1)], dim=2)
+        raise RuntimeError(
+            f"summary-bias cache out of sync: {T} keys, {q_len} new, cache "
+            f"{None if cache is None else cache.shape[2]}"
+        )
     module._beta_cache = cache
     q = torch.cat([query, query.new_ones(*query.shape[:3], 1)], dim=-1)
     k = torch.cat([key, (cache[..., None] / scaling).to(key.dtype)], dim=-1)

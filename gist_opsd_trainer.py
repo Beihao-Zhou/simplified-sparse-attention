@@ -70,6 +70,12 @@ def regist(ids):
     return reinsert_gists(ids, Global_data.gist_token_id, 4, 4, sink=Global_data.sink_size)
 
 
+def complete(ids):
+    """ids gisted to completion (the summaries a truncation cut off are appended), as
+    rollout(insert_gists=True) needs to continue the stream."""
+    return reinsert_gists(ids, Global_data.gist_token_id, 4, 4, sink=Global_data.sink_size)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -96,6 +102,11 @@ def main(argv=None):
         choices=["student", "data"],
         default="student",
         help="data: off-policy control, generated rows are the row's own continuation",
+    )
+    ap.add_argument(
+        "--decode_gists",
+        action="store_true",
+        help="insert summaries into the generated text as it grows (#13)",
     )
     ap.add_argument("--check_every", type=int, default=50)
     ap.add_argument(
@@ -138,7 +149,8 @@ def main(argv=None):
     for r in rows:
         start = next(j for j, l in enumerate(r["labels"]) if l != -100)
         if start >= args.ctx_len:
-            prompts.append(regist(r["input_ids"])[: args.ctx_len])
+            p = regist(r["input_ids"])[: args.ctx_len]
+            prompts.append(complete(p) if args.decode_gists else p)
             conts.append([t for t in r["input_ids"][args.ctx_len :] if t not in gist_set])
     if args.holdout:
         prompts, conts = prompts[: -args.holdout], conts[: -args.holdout]
@@ -159,7 +171,9 @@ def main(argv=None):
             if args.y_source == "data":
                 forced = torch.tensor(conts[j][: args.n_new], device=dev)
             n = args.n_new if forced is None else forced.numel()
-            y, lp_roll, steps = gist_opsd.rollout(model, ctx, n, vocab, gen, forced=forced)
+            y, lp_roll, steps = gist_opsd.rollout(
+                model, ctx, n, vocab, gen, forced=forced, insert_gists=args.decode_gists
+            )
             lp_t = gist_opsd.teacher_logprobs(teacher, ctx, y, vocab)
             lp_s, st = gist_opsd.replay(model, ctx, y, steps, vocab, route=args.lambda_route > 0)
             rkl = gist_opsd.reverse_kl(lp_s, lp_t).mean()
@@ -174,9 +188,10 @@ def main(argv=None):
                 / args.batch
             )
             if args.check_every and (step - 1) % args.check_every == 0 and i == 0:
-                idx = torch.arange(len(y), device=dev)
+                yr = gist_opsd.raw_tokens(y)
+                idx = torch.arange(len(yr), device=dev)
                 agg["replay_max_abs_lp"] = float(
-                    (lp_s.detach()[idx, y] - lp_roll[idx, y]).abs().max()
+                    (lp_s.detach()[idx, yr] - lp_roll[idx, yr]).abs().max()
                 )
         torch.nn.utils.clip_grad_norm_(params, 1.0)
         opt.step()

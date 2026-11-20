@@ -1152,6 +1152,33 @@ def _call_ref(module, q, k, v, mask, scaling, dropout, decode, chunk_q, **kwargs
     )
 
 
+def _decoding_summary(tmp_ids) -> bool:
+    """True when the decoded token is a summary inserted at generation time."""
+    if not Global_data.decode_gists or tmp_ids is None:
+        return False
+    return bool(torch.isin(tmp_ids[0, -1], torch.tensor(Global_data.gist_token_id, device=tmp_ids.device)))
+
+
+def _summary_query_decode(module, query, key, value, attention_mask, scaling):
+    """A summary decoded at generation time attends exactly by its gist-mask row, as summary
+    rows do in prefill (no unfolding). Its key changes the gist structure, so the decode
+    cache is rebuilt on the next step."""
+    from gist_qwen2 import repeat_kv
+
+    module._gist_decode_cache = None
+    bias = getattr(module, "summary_bias", None) is not None
+    if bias:
+        from gist_lora import augment_with_beta
+
+        query, key, value = augment_with_beta(module, query, key, value, scaling)
+    k = repeat_kv(key, module.num_key_value_groups)
+    v = repeat_kv(value, module.num_key_value_groups)
+    m = attention_mask[:, :, :, : k.shape[2]] if attention_mask is not None else None
+    out = torch.nn.functional.scaled_dot_product_attention(query, k, v, attn_mask=m, scale=scaling)
+    out = out.transpose(1, 2).contiguous()
+    return (out[..., :-1].contiguous() if bias else out), None
+
+
 def attn_dispatcher(
     module,
     query,
@@ -1175,6 +1202,8 @@ def attn_dispatcher(
         from gist_opsd import replay_attention
         return replay_attention(module, query, key, value, scaling)
     force_ref = os.environ.get("ATTN_IMPL", "sparse") == "ref"
+    if decode and query.shape[2] == 1 and _decoding_summary(kwargs.get("tmp_ids")):
+        return _summary_query_decode(module, query, key, value, attention_mask, scaling)
     if getattr(module, "summary_bias", None) is not None and not module.training:
         # Trained per-summary bias (gist_lora.SummaryBias), folded into q/k (ref path only).
         from gist_lora import augment_with_beta
