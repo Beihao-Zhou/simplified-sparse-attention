@@ -15,6 +15,7 @@ import argparse
 import json
 import math
 import os
+import sys
 import time
 
 import datasets
@@ -22,6 +23,7 @@ import torch
 from transformers import AutoTokenizer, Qwen2ForCausalLM
 
 import gist_opsd
+import gist_resume
 from gist_lora import apply_lora, apply_summary_bias, summary_spans
 from gist_qwen2 import GistQwen2ForCausalLM
 from gist_utils import Global_data, add_gist_tokens
@@ -116,7 +118,12 @@ def main(argv=None):
         help="leave the last N eligible prompts out of training (experiments/opsd_eval.py uses them)",
     )
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--resume", action="store_true", help="continue from <out>/ckpt.pt if any")
+    ap.add_argument("--save_every", type=int, default=10, help="steps between ckpt.pt saves")
     args = ap.parse_args(argv)
+    if args.resume and gist_resume.finished(args.out):
+        print("already finished:", args.out, flush=True)
+        return
     assert os.environ.get("ATTN_IMPL") == "ref", "0.5B (head_dim 64) needs ATTN_IMPL=ref"
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cudnn.allow_tf32 = False
@@ -156,12 +163,16 @@ def main(argv=None):
         prompts, conts = prompts[: -args.holdout], conts[: -args.holdout]
     print(f"{len(prompts)} prompts of {args.ctx_len} tokens ({args.holdout} held out)", flush=True)
     gen = torch.Generator(device=dev).manual_seed(args.seed)
+    resumed = gist_resume.load(args.out, model, opt, [gen]) if args.resume else 0
+    for _ in range(resumed):
+        sched.step()
+    preempt = gist_resume.Preemption()
     log = open(os.path.join(args.out, "log.jsonl"), "a")
     order = torch.randperm(
         len(prompts), generator=torch.Generator().manual_seed(args.seed)
     ).tolist()
 
-    for step in range(1, args.steps + 1):
+    for step in range(resumed + 1, args.steps + 1):
         t0 = time.time()
         agg = {"rkl": 0.0, "route": 0.0, "keys_per_row": 0.0}
         for i in range(args.batch):
@@ -207,6 +218,10 @@ def main(argv=None):
         print(json.dumps(rec), flush=True)
         log.write(json.dumps(rec) + "\n")
         log.flush()
+        if step < args.steps and (step % args.save_every == 0 or preempt.requested):
+            gist_resume.save(args.out, step, model, params, opt, [gen])
+            if preempt.requested:
+                sys.exit(gist_resume.PREEMPTED)
     sd = {
         n: p.detach().cpu()
         for n, p in model.named_parameters()

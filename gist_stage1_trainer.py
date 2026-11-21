@@ -14,6 +14,7 @@ import argparse
 import json
 import math
 import os
+import sys
 import time
 
 import datasets
@@ -22,6 +23,7 @@ import torch.nn.functional as F
 from transformers import AutoTokenizer, Qwen2ForCausalLM
 
 import gist_flex_attention
+import gist_resume
 from gist_lora import apply_lora, apply_summary_bias, summary_spans
 from gist_qwen2 import GistQwen2ForCausalLM
 from gist_utils import Global_data, add_gist_tokens
@@ -92,6 +94,8 @@ def parse_args(argv=None):
         help="first step is start_step + 1; the LR schedule continues from there",
     )
     ap.add_argument("--stop_at", type=int, default=0, help="stop (and save) after this step")
+    ap.add_argument("--resume", action="store_true", help="continue from <out>/ckpt.pt if any")
+    ap.add_argument("--save_every", type=int, default=25, help="steps between ckpt.pt saves")
     ap.add_argument(
         "--eval_only",
         default=None,
@@ -237,6 +241,9 @@ def main(argv=None):
     args = parse_args(argv)
     torch.manual_seed(args.seed)
     os.makedirs(args.out, exist_ok=True)
+    if args.resume and gist_resume.finished(args.out):
+        print("already finished:", args.out, flush=True)
+        return
     tok = AutoTokenizer.from_pretrained(args.model)
     teacher = Qwen2ForCausalLM.from_pretrained(args.model, dtype=torch.bfloat16).cuda().eval()
     model = GistQwen2ForCausalLM.from_pretrained(
@@ -281,8 +288,14 @@ def main(argv=None):
         hl = datasets.load_from_disk(os.path.expanduser(args.heldout_long))
         held_long = hl.select(range(len(hl) - args.eval_rows, len(hl)))
     it = batches(train, args.seq_len, args.seed, args)
-    log = open(os.path.join(args.out, "log.jsonl"), "a")
     accum = args.batch  # one sequence per forward
+    resumed = gist_resume.load(args.out, model, opt) if args.resume else 0  # trims log.jsonl
+    log = open(os.path.join(args.out, "log.jsonl"), "a")
+    if resumed:
+        args.start_step = resumed
+        for _ in range(resumed * accum):  # the data order continues where it stopped
+            next(it)
+    preempt = gist_resume.Preemption()
 
     def evaluate(step):
         down = Global_data.stage1["down"]
@@ -319,7 +332,8 @@ def main(argv=None):
         if args.freeze_level0:
             for p in groups["level0"]:
                 p.requires_grad_(False)
-    evaluate(args.start_step)
+    if not resumed:
+        evaluate(args.start_step)
     last = args.stop_at or args.steps
     for step in range(args.start_step + 1, last + 1):
         if args.phase2_at and step == args.phase2_at:
@@ -363,6 +377,10 @@ def main(argv=None):
         log.flush()
         if step % args.eval_every == 0 or step == last:
             evaluate(step)
+        if step < last and (step % args.save_every == 0 or preempt.requested):
+            gist_resume.save(args.out, step, model, params, opt)
+            if preempt.requested:
+                sys.exit(gist_resume.PREEMPTED)
     sd = {
         n: p.detach().cpu()
         for n, p in model.named_parameters()

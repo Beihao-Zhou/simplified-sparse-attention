@@ -105,8 +105,16 @@ def main():
         )
         for t in args.tasks
     }
+    # items already in --out are kept (a rerun after preemption continues)
+    done = {}
+    if os.path.exists(args.out):
+        for line in open(args.out):
+            r = json.loads(line)
+            done[(r["ckpt"], r["task"], r["i"])] = r["score"]
     out = open(args.out, "a")
     for ck in args.ckpts:
+        if all((ck, t, i) in done for t, its in items.items() for i in range(len(its))):
+            continue
         if ck == "base":
             model = (
                 Qwen2ForCausalLM.from_pretrained(
@@ -121,6 +129,9 @@ def main():
         for task, its in items.items():
             scores = []
             for i, it in enumerate(its):
+                if (ck, task, i) in done:
+                    scores.append(done[(ck, task, i)])
+                    continue
                 raw = tok.apply_chat_template(
                     [{"role": "user", "content": it["prompt"]}], add_generation_prompt=True
                 )
