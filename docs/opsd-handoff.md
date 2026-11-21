@@ -1,6 +1,6 @@
 # Handoff: Hierarchical Gist Compression + Selective Unfolding with OPSD (built on SSA)
 
-Nov 19, 2026 · @Someone（Nov 19 更新：设计决定、spike 计划、代码现状；Nov 20 更新：深层树、decode 时的 gist 与 1M 上下文的计划）
+Nov 19, 2026 · @Someone（Nov 19 更新：设计决定、spike 计划、代码现状；Nov 20 更新：深层树、decode 时的 gist 与 1M 上下文的计划；Nov 21 更新：转向长 agent 轨迹，决策见 ADR 0001）
 
 ## TL;DR 与使用方式
 
@@ -182,6 +182,12 @@ spike 全部通过后按顺序执行；每一项的验收标准满足后才进�
 - [ ] **M7 完整评估与系统测量**
 
   按「Evaluation」跑全部对照与 ablation；在 7B 上用 SSA 的 kernel 测 TTFT / TPOT；整理结果表。
+
+## 当前方向：长 agent 轨迹的推理与两阶段训练
+
+目标改为让这套代码支持长 agent 轨迹的推理和两阶段训练，所有结构性决策写在 `docs/adr/0001-long-agent-trajectory-infra.md`，父 issue 是 #16。要点：主线模型换成 Qwen2.5-7B-Instruct-1M，0.5B 做纵向链路与 spike；结构按 1M 设计，质量目标定在 256K（HF 没有 DCA，模型只训练到 256K，DCA 见 #27）；永远可见的原始 token 只有 system、工具定义和最近 2 轮（最多 8K）的滑动窗口；树固定为 4 叉 L = 4；选择改为逐级 beam（每级固定 k，顶层最多 4096 个节点），作为新的 `DECODE_SELECT` 模式与旧路径并存；1M、batch 1 在 H200 上全部放 GPU，原始 KV 下放推迟（#26）。先用 0.5B 在 128K 上打通「片段标签与可见窗口 → 追加 prefill → 新选择规则 → kernel → OPSD」（#17–#21），再换 7B 加长到 256K（#22），所有功能做完后才进入质量测试。
+
+下一节的第 4 步（位置与老师）和第 5 步（多级 offload）已由 ADR 0001 取代；第 3 步（#14）推迟到质量测试阶段。
 
 ## 下一阶段：深层树、decode 时的 gist 与 1M 上下文
 
