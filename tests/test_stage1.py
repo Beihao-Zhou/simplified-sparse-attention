@@ -249,3 +249,32 @@ def test_teacher_chain_at_four_levels(cfg):
     for sb in bias:
         if sb.dim() == 2:  # b [levels, num_kv]
             assert (sb.grad.abs().sum(-1) > 0).all(), sb.grad
+
+
+@pytest.mark.parametrize("k,zero", [((10**6,), True), ((1,), False)])
+def test_select_mask_full_expansion_is_the_raw_teacher(cfg, k, zero):
+    """#28: with every node expanded and coarse terms on, the 'sel' student of raw rows is
+    plain causal attention over raw tokens, so sel|raw vanishes; a small k selects."""
+    import gist_beam
+
+    cfg._attn_implementation = gist_flex_attention.GIST_FLEX
+    Global_data.train_attn = "flex"
+    Global_data.stage1 = {
+        "pairs": [("sel", "raw"), ("hier", "raw")],
+        "down": "sel",
+        "lambda_ntp": 0.0,
+        "select": {"cfg": gist_beam.BeamConfig(k=k, coarse=True), "rows_from": 0},
+    }
+    torch.manual_seed(0)
+    model = GistQwen2ForCausalLM(cfg).float().eval()
+    apply_lora(model, "gist", r=4)
+    _randomize_lora(model)
+    ids = _ids(n_raw=300)
+    with torch.no_grad():
+        model(input_ids=ids, attention_mask=torch.ones_like(ids), use_cache=False)
+    last = {n: float(torch.stack(v).max()) for n, v in Global_data.stage1["losses"].items()}
+    assert last["hier|raw"] > 1e-4
+    if zero:
+        assert last["sel|raw"] < 1e-10, last
+    else:
+        assert last["sel|raw"] > 1e-6, last

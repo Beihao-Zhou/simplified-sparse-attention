@@ -111,12 +111,13 @@ def prepare_gist_flex(
         out["gist_teacher_masks"] = {
             n: make_block_mask(make_teacher_mask_mod(f, n, kv_perm=perm), B, T, block_size,
                                str(input_ids.device), input_ids.is_cuda)
-            for n in names - {"hier"}}
+            for n in names - {"hier", "sel"}}  # "sel" is built per layer
         pos = torch.arange(T, device=input_ids.device)[None]
         out["gist_loss_rows"] = (f.level < 0) & ~f.is_pad & (pos >= f.sink_end[:, None])
         if f.pinned is not None:  # pinned rows see their whole prefix: student = teacher
             out["gist_loss_rows"] &= ~f.pinned
         out["gist_input_ids"] = input_ids
+        out["gist_features"] = f
         # keys in no unit (pinned segments, the sink) are out of the routing labels
         from gist_routing import unit_exclude
         out["gist_route_exclude"] = unit_exclude(
@@ -184,13 +185,62 @@ def gist_flex_attention_forward(
     st = Global_data.stage1
     if st is None:
         return attend(gist_block_mask), None
-    out = _stage1_attention(module, attend, gist_block_mask, kwargs["gist_teacher_masks"],
+    teacher_masks = kwargs["gist_teacher_masks"]
+    names = {n for pair in st["pairs"] for n in pair} | {st["down"]}
+    if "sel" in names:
+        teacher_masks = {**teacher_masks, "sel": _select_block_mask(
+            query, key_orig, beta, kwargs, st["select"], gist_kv_perm, scaling)}
+    out = _stage1_attention(module, attend, gist_block_mask, teacher_masks,
                             kwargs["gist_loss_rows"], st)
     if st.get("route_rows", 0) > 0 and module.layer_idx > 0:
         _stage1_routing(module, query, key_orig, beta, kwargs["gist_input_ids"],
                         kwargs["gist_route_exclude"],
                         kwargs["gist_loss_rows"], scaling, st)
     return out, None
+
+
+@torch.no_grad()
+def _select_block_mask(query, key, beta, kwargs, sel, perm, scaling):
+    """BlockMask "sel" (#28, ADR 0002): raw rows at or after sel["rows_from"] see what the
+    decode-time beam selection (gist_beam.py) keeps, computed from this layer's q, k and
+    beta without gradient; every other row keeps the gist mask. Differs per KV group, so it
+    carries a head dimension. query [B, H, T, d], key / beta in original key order."""
+    from torch.nn.attention.flex_attention import create_block_mask, create_mask
+
+    import gist_beam as gb
+    from src.data.gist_flex_mask import make_gist_mask_mod
+
+    f, ids = kwargs["gist_features"], kwargs["gist_input_ids"]
+    B, H, T, _ = query.shape
+    H_kv = key.shape[1]
+    hpg = H // H_kv
+    hier = create_mask(make_gist_mask_mod(f), B, None, T, T, device=query.device)[:, 0]
+    pos = torch.arange(T, device=query.device)
+    masks = []
+    for b in range(B):
+        tree = gb.build_tree(ids[b], Global_data.gist_token_id, Global_data.sink_size,
+                             None if f.pinned is None else f.pinned[b],
+                             None if f.turn is None else f.turn[b])
+        sel_rows = (tree.level < 0) & (pos >= sel["rows_from"])
+        per = []
+        for g in range(H_kv):
+            vis = gb.visible_all_rows(
+                tree, query[b, g * hpg:(g + 1) * hpg], key[b, g],
+                None if beta is None else beta[b, g], sel["cfg"], scaling,
+                prev_chunks=Global_data.num_previous_chunks, raw_window=Global_data.raw_window,
+                window_turns=Global_data.window_turns, rows_from=sel["rows_from"])
+            per.append(torch.where(sel_rows[:, None], vis, hier[b]))
+        masks.append(torch.stack(per))
+    m = torch.stack(masks).gather(3, perm[:, None, None, :].expand(B, H_kv, T, T))
+
+    def mask_mod(b, h, q_idx, kv_idx):
+        return m[b, h // hpg, q_idx, kv_idx]
+
+    import torch._inductor.config as inductor_config
+    with inductor_config.patch(realize_opcount_threshold=10_000, realize_reads_threshold=10_000,
+                               realize_acc_reads_threshold=10_000):
+        return create_block_mask(mask_mod, B, H, T, T, device=str(query.device),
+                                 BLOCK_SIZE=128, _compile=query.is_cuda)
 
 
 def _stage1_routing(module, query, key, beta, input_ids, exclude, rows, scaling, st):

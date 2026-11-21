@@ -298,13 +298,15 @@ def beam_decode(module, query, key, value, ids, scaling):
 def visible_all_rows(tree: Tree, q: torch.Tensor, k_keys: torch.Tensor,
                      beta: Optional[torch.Tensor], cfg: BeamConfig, scaling: float,
                      prev_chunks: int = 1, raw_window: int = 0, window_turns: int = 0,
-                     chunk: int = 1024) -> torch.Tensor:
+                     chunk: int = 1024, rows_from: int = 0) -> torch.Tensor:
     """[T, T] keys of every raw row of one KV group under beam selection, for training
     forwards that select at every position (#28). Summary rows are left empty: the
-    caller keeps the gist mask for them. Selection carries no gradient. q [h, T, d]."""
+    caller keeps the gist mask for them, as for raw rows before rows_from. Selection carries
+    no gradient. q [h, T, d]."""
     T = tree.level.numel()
     out = torch.zeros(T, T, dtype=torch.bool, device=q.device)
     rows_all = torch.nonzero(tree.level < 0).flatten()
+    rows_all = rows_all[rows_all >= rows_from]
     for i in range(0, rows_all.numel(), chunk):
         rows = rows_all[i:i + chunk]
         s = select(tree, q[:, rows], k_keys, beta, rows, cfg, scaling, prev_chunks,

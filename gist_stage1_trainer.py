@@ -67,6 +67,15 @@ def parse_args(argv=None):
         "oracle parents (gist_routing.py)",
     )
     ap.add_argument("--route_oracle_k", type=int, default=256)
+    ap.add_argument(
+        "--select_train",
+        action="store_true",
+        help="#28: raw rows attend through the decode-time beam selection (student 'sel', "
+        "teacher raw); the chain still trains the summaries",
+    )
+    ap.add_argument("--select_k", type=int, nargs="+", default=[16], help="free nodes per level")
+    ap.add_argument("--select_merge", choices=["union", "sumexp"], default="union")
+    ap.add_argument("--select_coarse", action="store_true")
     ap.add_argument("--per_level", action="store_true", help="one gist LoRA per summary level")
     ap.add_argument(
         "--phase2_at",
@@ -128,7 +137,9 @@ def parse_args(argv=None):
     )
     args = ap.parse_args(argv)
     if args.pairs is None:
-        args.pairs = teacher_chain(args.levels)
+        args.pairs = teacher_chain(args.levels) + (["sel:raw"] if args.select_train else [])
+    if args.select_train and args.down == "hier":
+        args.down = "sel"
     return args
 
 
@@ -157,9 +168,21 @@ def stage1_config(args, pairs=None, down=None):
         "lambda_ntp": args.lambda_ntp,
         "route_rows": args.route_rows if args.lambda_route > 0 else 0,
         "route_scope": getattr(args, "route_scope", "level"),
+        "select": select_config(args),
         "route_oracle_k": getattr(args, "route_oracle_k", 256),
         "weights": {"route": args.lambda_route},
     }
+
+
+def select_config(args, rows_from=0):
+    """The beam selection of a 'sel' mask (gist_beam.py), or None."""
+    import gist_beam
+
+    if not getattr(args, "select_train", False) and rows_from == 0:
+        return None
+    return {"cfg": gist_beam.BeamConfig(k=tuple(args.select_k), merge=args.select_merge,
+                                        coarse=args.select_coarse),
+            "rows_from": rows_from}
 
 
 def row_ids(r, args):
@@ -203,7 +226,8 @@ def suffix_kl(model, teacher, rows, seq_len, args, down):
     """Mean reverse KL per raw token past the sink, student (no unfolding) vs base on raw text."""
     gist = torch.tensor(Global_data.gist_token_id)
     saved = Global_data.stage1
-    Global_data.stage1 = {"pairs": [], "down": down, "lambda_ntp": 0.0}
+    Global_data.stage1 = {"pairs": [], "down": down, "lambda_ntp": 0.0,
+                          "select": saved.get("select") if saved else None}
     model.eval()
     tot, n = 0.0, 0
     try:
