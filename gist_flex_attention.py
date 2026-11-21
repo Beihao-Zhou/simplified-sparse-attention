@@ -44,6 +44,13 @@ def _flex(device: torch.device):
     if device.type != "cuda" or os.environ.get("GIST_FLEX_COMPILE", "1") != "1":
         return flex_attention
     key = torch.is_grad_enabled()
+    if not _compiled_flex:
+        # Dynamo keeps one graph per (mask kind, grad mode, score_mod) on flex_attention's
+        # code object; L levels need ~3 (L + 1) of them, past the default limit of 8, after
+        # which it runs eager flex, whose backward into beta fails under checkpointing.
+        cfg = torch._dynamo.config
+        name = "recompile_limit" if hasattr(cfg, "recompile_limit") else "cache_size_limit"
+        setattr(cfg, name, max(getattr(cfg, name), 64))
     if key not in _compiled_flex:
         # Not dynamic=False by default: that recompiles per length and, past the recompile
         # limit, falls back to eager, which materializes [B, H, T, T] scores.
