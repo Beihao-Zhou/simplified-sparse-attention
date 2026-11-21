@@ -18,7 +18,7 @@ while true; do
       "import sys,json;print(json.load(sys.stdin)['status']['network_interfaces'][0]['public_ip_address']['address'].split('/')[0])")
     st=$(ssh -o ConnectTimeout=20 -o StrictHostKeyChecking=accept-new "$HOST_USER@$ip" "cd $REPO;
       if grep -q '$DONE_PATTERN' $LOG 2>/dev/null; then echo done;
-      elif pgrep -f '$QUEUE' >/dev/null; then echo running;
+      elif pgrep -f '^bash $QUEUE' >/dev/null; then echo running;  # not this ssh shell, whose command line names $QUEUE too
       else nohup bash $QUEUE >> $LOG 2>&1 < /dev/null & echo launched; fi" 2>/dev/null)
     echo "$(date +%T) $ip $st"
     [ "$st" = done ] && exit 0
