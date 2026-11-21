@@ -1,0 +1,53 @@
+gist_stage1_trainer.py
+  s_466735a13fa48a::t_11b34e178fac37 62-69,159-160
+experiments/deep_recall.py
+  s_466735a13fa48a::t_d948da35367ff4 5-14,19-20,22-23
+  s_466735a13fa48a::t_54069cd31d9b0b 43,57-62,180,183,250-279
+  s_466735a13fa48a::t_ff740a308b9a79 212,305,313,384
+experiments/agent_data.py
+  s_466735a13fa48a::t_257c5df7d1f40e 15-16,133,135-138,148-150,154-168,170-182,185-186
+tests/test_gist_beam_decode.py
+  s_466735a13fa48a::t_90de2778c1e978 1-84
+tests/test_routing_scope.py
+  s_466735a13fa48a::t_a2da78fb65d0f9 1-63,66-87
+  s_466735a13fa48a::t_4f08d35b390ce5 64-65
+gist_routing.py
+  s_466735a13fa48a::t_4ffaaf91413045 25-27,29-38,41-43,53-54,56-84,88-90
+attn_candidate.py
+  s_466735a13fa48a::t_f1bb85ef7b463f 1207-1210
+gist_beam.py
+  s_466735a13fa48a::t_947f7cfd1c523e 295-313
+  s_466735a13fa48a::t_f1bb85ef7b463f 222-294
+  s_466735a13fa48a::t_226ef757906189 1-221
+tests/test_gist_beam.py
+  s_466735a13fa48a::t_947f7cfd1c523e 143-157
+  s_466735a13fa48a::t_db9119e04e3c19 87
+  s_466735a13fa48a::t_c3540dab3fc42f 1-86,88-142
+gist_utils.py
+  s_466735a13fa48a::t_f1bb85ef7b463f 35-36
+gist_llama.py
+  s_466735a13fa48a::t_3c64645126402f 4,686-691
+tests/test_agent_segments.py
+  s_466735a13fa48a::t_0f98d0e1ff14d9 77-78,80-81
+src/data/gist_flex_mask.py
+  s_466735a13fa48a::t_0f98d0e1ff14d9 109-118
+gist_flex_attention.py
+  s_466735a13fa48a::t_11b34e178fac37 120-123,209-211
+  s_466735a13fa48a::t_985652bece4ad7 191,196
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "c09c459762aea86aa3084c995b9f7176d6902a8f",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
