@@ -1,0 +1,23 @@
+results/task_eval_4k.jsonl
+  s_466735a13fa48a::t_cf4953d4b2a561 1-1600
+results/task_eval_pk8k.jsonl
+  s_466735a13fa48a::t_cf4953d4b2a561 1-200
+results/spikes.csv
+  s_466735a13fa48a::t_61ff31dcc9b3bd 63-106
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "e7b3b283c780a061be801e2d192a06671eaaf1b6",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
