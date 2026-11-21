@@ -1,0 +1,39 @@
+src/data/gist_flex_mask.py
+  s_466735a13fa48a::t_d59389b51624ad 37-39,68-70,72-75,113-115,142-143,147,153,179-182,192-215,233,249-252
+gist_utils.py
+  s_466735a13fa48a::t_f1e5d36b577322 34
+src/data/gist.py
+  s_466735a13fa48a::t_ff455ec993d791 1075-1076,1078-1081,1084-1088,1092,1096-1100
+  s_466735a13fa48a::t_df5e82a841f4dc 1101-1102
+gist_qwen2.py
+  s_466735a13fa48a::t_f1e5d36b577322 1296-1298
+gist_stage1_trainer.py
+  s_466735a13fa48a::t_ea8b5cd94d89e0 140-141
+  s_466735a13fa48a::t_8a9fbec4c7a04f 30,106-114,162-178,187-188,203-205,208-210,378,383
+src/data/gist_stream.py
+  s_466735a13fa48a::t_227a6aaceff676 11-14,48,52-53,78,84-85,92,128-149
+tests/test_agent_segments.py
+  s_466735a13fa48a::t_9b35aad3bd63a4 1-96,98-126
+  s_466735a13fa48a::t_a8671a4895cd9d 97
+experiments/agent_data.py
+  s_466735a13fa48a::t_316ae249d22a01 99,113-120,143-144
+  s_466735a13fa48a::t_7c7d50e0a3022e 1-98,100-112,121-142,145-166
+gist_flex_attention.py
+  s_466735a13fa48a::t_f1e5d36b577322 80-82,85-86,95-97,117-118
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "a3fde2d8b171065feabf893ce7e0d3600cf534d0",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
