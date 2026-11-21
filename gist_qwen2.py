@@ -1293,6 +1293,9 @@ class GistQwen2Model(Qwen2PreTrainedModel):
                 Global_data.num_previous_chunks,
                 Global_data.pad_token_id,
                 raw_window=Global_data.raw_window,
+                pinned=kwargs.pop("gist_pinned", None),
+                turn=kwargs.pop("gist_turn", None),
+                window_turns=Global_data.window_turns,
             ))
             _attention_mask = None
             kwargs["causal_mask"] = None

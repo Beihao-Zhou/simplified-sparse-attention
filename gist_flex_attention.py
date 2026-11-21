@@ -77,9 +77,13 @@ def prepare_gist_flex(
     pad_token_id: Optional[int],
     block_size: int = 128,
     raw_window: int = 0,
+    pinned: Optional[torch.Tensor] = None,
+    turn: Optional[torch.Tensor] = None,
+    window_turns: int = 0,
 ) -> dict:
     """Per-batch BlockMask and key permutation for all layers. Padding is found by
-    pad_token_id; attention_mask is not read."""
+    pad_token_id; attention_mask is not read. pinned / turn ([B, T]) carry the segment
+    labels of agent trajectories (src/data/gist_flex_mask.py, R6 and R7)."""
     if pad_token_id is None:
         raise ValueError(f"{GIST_FLEX} needs pad_token_id to mask padded keys")
     f = build_gist_mask_features(
@@ -88,6 +92,9 @@ def prepare_gist_flex(
         num_previous_chunks=num_previous_chunks,
         pad_token=pad_token_id,
         raw_window=raw_window,
+        pinned=pinned,
+        turn=turn,
+        window_turns=window_turns,
     )
     perm = gist_pool_permutation(f)
     block_mask = make_gist_block_mask(
@@ -107,6 +114,8 @@ def prepare_gist_flex(
             for n in names - {"hier"}}
         pos = torch.arange(T, device=input_ids.device)[None]
         out["gist_loss_rows"] = (f.level < 0) & ~f.is_pad & (pos >= f.sink_end[:, None])
+        if f.pinned is not None:  # pinned rows see their whole prefix: student = teacher
+            out["gist_loss_rows"] &= ~f.pinned
         out["gist_input_ids"] = input_ids
     return out
 

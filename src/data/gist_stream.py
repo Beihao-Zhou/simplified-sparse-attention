@@ -8,6 +8,10 @@ neither of which decoding can do. The rule here can:
 * a level-l gist follows every J_l level-(l-1) gists (`group`: one int or a list);
 * nothing else, so gisting a prefix gives a prefix of gisting any extension.
 
+Pinned tokens (system prompt and tool definitions of an agent trajectory, ADR 0001) are
+passed through untouched: they are never chunked and do not count towards a chunk, so
+the stream continues across them and the tree stays regular.
+
 The offline helpers wrap `OnlineGistInserter`, so training and decoding cannot drift.
 """
 
@@ -41,10 +45,12 @@ class OnlineGistInserter:
         self.raw_in_chunk = 0                   # in the open level-0 chunk
         self.counts = [0] * len(self.gist_ids)  # summary tokens emitted per level
 
-    def push(self, token: int) -> List[int]:
+    def push(self, token: int, pinned: bool = False) -> List[int]:
         """Account for one raw token; return the summary tokens to append after it."""
         if token in self.gist_ids:
             raise ValueError("push() takes raw tokens; summary tokens are emitted by the inserter")
+        if pinned:
+            return []
         self.n_raw += 1
         if self.n_raw <= self.sink:
             return []
@@ -69,19 +75,21 @@ def insert_gists_with_map(
     group: Groups,
     sink: int = 0,
     inserter: Optional[OnlineGistInserter] = None,
+    pinned: Optional[Sequence[bool]] = None,
 ) -> Tuple[List[int], List[int]]:
     """Insert summary tokens by position.
 
     Returns (tokens, src) where src[i] is the index in token_ids of output token i,
     or -1 for an inserted summary token. Pass an existing `inserter` to continue a
-    stream (e.g. a later turn) from where it stopped.
+    stream (e.g. a later turn) from where it stopped. pinned[i] marks token i as never
+    compressed (see the module docstring).
     """
     ins = inserter or OnlineGistInserter(gist_ids, chunk_size, group, sink)
     out, src = [], []
     for i, t in enumerate(token_ids):
         out.append(t)
         src.append(i)
-        for g in ins.push(t):
+        for g in ins.push(t, bool(pinned[i]) if pinned is not None else False):
             out.append(g)
             src.append(-1)
     return out, src
@@ -117,3 +125,25 @@ def stream_labels(tokens: Sequence[int], gist_ids: Sequence[int], loss_mask: Opt
         keep = t not in gist and (loss_mask is None or loss_mask[i])
         labels.append(t if keep else -100)
     return labels
+
+
+def gist_segments(
+    token_ids: Sequence[int],
+    pinned: Sequence[bool],
+    turn: Sequence[int],
+    gist_ids: Sequence[int],
+    chunk_size: int,
+    group: Groups,
+    sink: int = 0,
+) -> Tuple[List[int], List[bool], List[int]]:
+    """Gist a raw sequence with per-token pinned flags and turn ids; returns the gisted
+    tokens with the flags and turns carried over (a summary token is not pinned and takes
+    the turn of the raw token before it)."""
+    out, src = insert_gists_with_map(token_ids, gist_ids, chunk_size, group, sink, pinned=pinned)
+    p_out, t_out = [], []
+    for s in src:
+        if s >= 0:
+            last = s
+        p_out.append(bool(pinned[s]) if s >= 0 else False)
+        t_out.append(int(turn[last]))
+    return out, p_out, t_out

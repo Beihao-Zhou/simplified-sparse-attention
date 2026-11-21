@@ -27,7 +27,7 @@ import gist_resume
 from gist_lora import apply_lora, apply_summary_bias, summary_spans
 from gist_qwen2 import GistQwen2ForCausalLM
 from gist_utils import Global_data, add_gist_tokens
-from src.data.gist_stream import reinsert_gists, stream_labels
+from src.data.gist_stream import gist_segments, reinsert_gists, stream_labels
 
 
 def parse_args(argv=None):
@@ -104,6 +104,15 @@ def parse_args(argv=None):
     )
     ap.add_argument("--sink", type=int, default=3)
     ap.add_argument(
+        "--raw_window", type=int, default=0, help="raw keys within this many positions stay visible"
+    )
+    ap.add_argument(
+        "--window_turns",
+        type=int,
+        default=0,
+        help="agent data: the raw window also needs the key within this many turns (ADR 0001: 2)",
+    )
+    ap.add_argument(
         "--levels",
         type=int,
         default=2,
@@ -128,6 +137,8 @@ def setup_globals(tok, gist_ids, args):
     Global_data.num_previous_chunks = 1
     Global_data.pad_token_id = tok.pad_token_id
     Global_data.train_attn = "flex"
+    Global_data.raw_window = getattr(args, "raw_window", 0)
+    Global_data.window_turns = getattr(args, "window_turns", 0)
 
 
 def stage1_config(args, pairs=None, down=None):
@@ -148,6 +159,23 @@ def row_ids(r, args):
     return reinsert_gists(r["input_ids"], Global_data.gist_token_id, 4, 4, sink=args.sink)
 
 
+def row_inputs(r, args, seq_len):
+    """(ids, labels, segment kwargs) of a row truncated to seq_len. Agent trajectories
+    (experiments/agent_data.py) are raw tokens with pinned flags and turn ids, gisted
+    here; the segment kwargs then carry them to the gist mask (gist_pinned, gist_turn)."""
+    gist = Global_data.gist_token_id
+    if "pinned" in r:
+        ids, pinned, turn = gist_segments(
+            r["input_ids"], r["pinned"], r["turn"], gist, 4, 4, sink=args.sink)
+        ids, pinned, turn = ids[:seq_len], pinned[:seq_len], turn[:seq_len]
+        seg = {"gist_pinned": torch.tensor([pinned]), "gist_turn": torch.tensor([turn])}
+        return ids, stream_labels(ids, gist), seg
+    if args.levels <= 2:
+        return r["input_ids"][:seq_len], r["labels"][:seq_len], {}
+    ids = row_ids(r, args)[:seq_len]
+    return ids, stream_labels(ids, gist), {}
+
+
 def batches(ds, seq_len, seed, args):
     """Endless micro-batches of rows truncated to seq_len (rows shorter are skipped)."""
     g = torch.Generator().manual_seed(seed)
@@ -156,12 +184,8 @@ def batches(ds, seq_len, seed, args):
             r = ds[i]
             if r["length"] < seq_len:
                 continue
-            if args.levels <= 2:
-                ids, labels = r["input_ids"][:seq_len], r["labels"][:seq_len]
-            else:
-                ids = row_ids(r, args)[:seq_len]
-                labels = stream_labels(ids, Global_data.gist_token_id)
-            yield torch.tensor([ids]), torch.tensor([labels])
+            ids, labels, seg = row_inputs(r, args, seq_len)
+            yield torch.tensor([ids]), torch.tensor([labels]), seg
 
 
 @torch.no_grad()
@@ -176,12 +200,14 @@ def suffix_kl(model, teacher, rows, seq_len, args, down):
         for r in rows:
             if r["length"] < seq_len:
                 continue
-            ids = torch.tensor([row_ids(r, args)[:seq_len]], device="cuda")
+            ids, _, seg = row_inputs(r, args, seq_len)
+            ids = torch.tensor([ids], device="cuda")
+            seg = {k: v.cuda() for k, v in seg.items()}
             raw_mask = ~torch.isin(ids[0], gist.to(ids.device))
             raw = ids[0][raw_mask][None]
-            hs = model.model(input_ids=ids, attention_mask=torch.ones_like(ids)).last_hidden_state[
-                0
-            ][raw_mask]
+            hs = model.model(
+                input_ids=ids, attention_mask=torch.ones_like(ids), **seg
+            ).last_hidden_state[0][raw_mask]
             ht = teacher.model(input_ids=raw).last_hidden_state[0]
             for s in range(args.sink, ht.shape[0], 1024):
                 ls = F.log_softmax(teacher.lm_head(hs[s : s + 1024]).float(), -1)
@@ -349,11 +375,12 @@ def main(argv=None):
         t0 = time.time()
         agg = {}
         for _ in range(accum):
-            ids, labels = next(it)
+            ids, labels, seg = next(it)
             out = model(
                 input_ids=ids.cuda(),
                 attention_mask=torch.ones_like(ids).cuda(),
                 labels=labels.cuda(),
+                **{k: v.cuda() for k, v in seg.items()},
             )
             (out.loss / accum).backward()
             for k, v in Global_data.stage1["last"].items():

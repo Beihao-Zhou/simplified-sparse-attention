@@ -34,6 +34,9 @@ class GistMaskFeatures:
     num_levels: int
     num_previous_chunks: int
     raw_window: int = 0
+    pinned: Optional[torch.Tensor] = None  # [B, T] bool: system / tool definitions (R7)
+    turn: Optional[torch.Tensor] = None    # [B, T] int: turn id of each token (R6)
+    window_turns: int = 0                  # R6 also needs turn[q] - turn[k] < window_turns
 
 
 def _occurrence_table(is_x: torch.Tensor) -> torch.Tensor:
@@ -62,8 +65,14 @@ def build_gist_mask_features(
     num_previous_chunks: int = 0,
     pad_token: Optional[int] = None,
     raw_window: int = 0,
+    pinned: Optional[torch.Tensor] = None,
+    turn: Optional[torch.Tensor] = None,
+    window_turns: int = 0,
 ) -> GistMaskFeatures:
-    """Arguments mirror `make_hierarchical_gist_mask_greedy`, plus `raw_window` (R6)."""
+    """Arguments mirror `make_hierarchical_gist_mask_greedy`, plus `raw_window` and
+    `turn` / `window_turns` (R6) and `pinned` (R7), all [B, T] like inputs."""
+    if window_turns > 0 and turn is None:
+        raise ValueError("window_turns needs per-token turn ids")
     B, T = inputs.shape
     device = inputs.device
     L, P = len(gist_token), num_previous_chunks
@@ -101,6 +110,9 @@ def build_gist_mask_features(
         level=level.int(), close=close.int(), par=par.int(), par_p=par_p.int(), start=start.int(),
         sink_end=sink_end.int(), has_gist=(level >= 0).any(-1), is_pad=is_pad,
         num_levels=L, num_previous_chunks=P, raw_window=raw_window,
+        pinned=None if pinned is None else pinned.to(device=device, dtype=torch.bool),
+        turn=None if turn is None else turn.to(device=device, dtype=torch.int32),
+        window_turns=window_turns,
     )
 
 
@@ -127,15 +139,18 @@ def make_gist_mask_mod(
       R4  if P > 0: l(k) >= 0 below the top, par[k] < q <= par_p[k] and l(q) <= l(k)+1
           (children of the previous P parents).
       R5  attention sink: k < sink_end.
-      R6  raw window (W > 0): raw q and raw k with q - k < W. Once gists are inserted
+      R6  raw window (W > 0 or N > 0): raw q and raw k with q - k < W (if W > 0) and
+          turn[q] - turn[k] < N (if N = window_turns > 0). Once gists are inserted
           everywhere, R2 alone would leave a generated token only 4-8 exact tokens
           (L=4, P=1); the window keeps recent text exact. Summary queries are
           excluded, so a gist still summarizes exactly its chunk.
+      R7  pinned keys (system prompt, tool definitions) are visible to every query.
     Examples without summary tokens fall back to plain causal attention; padded keys
     are never visible.
     """
     P, W = f.num_previous_chunks, f.raw_window
     m = max_level
+    window, pinned_k = _window_and_pinned(f, kv_perm)
     top = f.num_levels - 1 if m is None else m - 1
     level, start, sink_end, has_gist, is_pad = f.level, f.start, f.sink_end, f.has_gist, f.is_pad
     if kv_perm is None:
@@ -161,8 +176,10 @@ def make_gist_mask_mod(
             vis = vis | (gist_k & (lk < top) & (par_k < q_idx) & (q_idx <= k_par_p[b, kv_idx])
                          & (lq <= lk + 1))
         vis = vis | (k < sink_end[b])                                                 # R5
-        if W > 0:                                                                     # R6
-            vis = vis | ((lq < 0) & ~is_pad[b, q_idx] & (lk < 0) & (q_idx - k < W))
+        if window is not None:                                                        # R6
+            vis = vis | window(b, q_idx, kv_idx, k, lq, lk)
+        if pinned_k is not None:                                                      # R7
+            vis = vis | pinned_k[b, kv_idx]
         vis = vis | ~has_gist[b]
         out = (k <= q_idx) & vis & ~k_pad[b, kv_idx]
         if m is not None:
@@ -170,6 +187,30 @@ def make_gist_mask_mod(
         return out
 
     return mask_mod
+
+
+def _window_and_pinned(f: GistMaskFeatures, kv_perm: Optional[torch.Tensor]):
+    """R6 as a function of (b, q, kv slot, key position, levels), and the pinned flag in
+    key order; None when the rule is off."""
+    W, N = f.raw_window, f.window_turns
+    pinned_k = turn_k = None
+    if f.pinned is not None:
+        pinned_k = f.pinned if kv_perm is None else f.pinned.gather(1, kv_perm)
+    if N > 0:
+        turn_k = f.turn if kv_perm is None else f.turn.gather(1, kv_perm)
+    if W <= 0 and N <= 0:
+        return None, pinned_k
+    is_pad, turn = f.is_pad, f.turn
+
+    def window(b, q_idx, kv_idx, k, lq, lk):
+        vis = (lq < 0) & ~is_pad[b, q_idx] & (lk < 0)
+        if W > 0:
+            vis = vis & (q_idx - k < W)
+        if N > 0:
+            vis = vis & (turn[b, q_idx] - turn_k[b, kv_idx] < N)
+        return vis
+
+    return window, pinned_k
 
 
 def make_teacher_mask_mod(f: GistMaskFeatures, kind: str, kv_perm: Optional[torch.Tensor] = None):
@@ -188,8 +229,8 @@ def make_teacher_mask_mod(f: GistMaskFeatures, kind: str, kv_perm: Optional[torc
         return make_gist_mask_mod(f, kv_perm, max_level=int(kind[1:]))
     if kind not in ("raw", "g1"):
         raise ValueError(f"unknown teacher mask {kind!r}")
-    W = f.raw_window
     level, start, sink_end, has_gist, is_pad = f.level, f.start, f.sink_end, f.has_gist, f.is_pad
+    window, pinned_k = _window_and_pinned(f, kv_perm)
     if kv_perm is None:
         k_pos, k_level, k_pad = None, level, is_pad
     else:
@@ -205,8 +246,10 @@ def make_teacher_mask_mod(f: GistMaskFeatures, kind: str, kv_perm: Optional[torc
             lq = level[b, q_idx]
             vis = (lk == 0) | ((lq <= 0) & (lk < 0) & (k >= start[b, q_idx]))
             vis = vis | ((k < sink_end[b]) & (lk <= 0))
-            if W > 0:
-                vis = vis | ((lq < 0) & ~is_pad[b, q_idx] & (lk < 0) & (q_idx - k < W))
+            if window is not None:
+                vis = vis | window(b, q_idx, kv_idx, k, lq, lk)
+            if pinned_k is not None:
+                vis = vis | pinned_k[b, kv_idx]
             vis = vis | ~has_gist[b]
         return (k <= q_idx) & (vis | (k == q_idx)) & ~k_pad[b, kv_idx]
 

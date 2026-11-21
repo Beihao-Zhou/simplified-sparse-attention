@@ -1072,18 +1072,32 @@ def add_raw_window(
     gist_token: list,
     raw_window: int,
     pad_token: Optional[int] = None,
+    turn: Optional[torch.Tensor] = None,
+    window_turns: int = 0,
 ) -> torch.Tensor:
-    """Dense counterpart of R6 in src/data/gist_flex_mask.py, on a bool [B, 1, T, T] mask."""
-    if raw_window <= 0:
+    """Dense counterpart of R6 in src/data/gist_flex_mask.py, on a bool [B, 1, T, T] mask:
+    raw q, raw k, 0 <= q - k < raw_window (if > 0) and turn[q] - turn[k] < window_turns
+    (if > 0, turn [B, T])."""
+    if raw_window <= 0 and window_turns <= 0:
         return mask
     T = inputs.shape[1]
-    band = torch.ones(T, T, dtype=torch.bool, device=inputs.device).tril()
-    band &= ~band.tril(-raw_window)  # 0 <= q - k < raw_window
+    win = torch.ones(T, T, dtype=torch.bool, device=inputs.device).tril()[None]
+    if raw_window > 0:
+        win = win & ~win.tril(-raw_window)  # 0 <= q - k < raw_window
+    if window_turns > 0:
+        win = win & (turn[:, :, None] - turn[:, None, :] < window_turns)
     is_raw = ~torch.isin(inputs, torch.tensor(list(gist_token), device=inputs.device))
     if pad_token is not None:
         is_raw = is_raw & (inputs != pad_token)
-    win = band[None] & is_raw[:, :, None] & is_raw[:, None, :]
+    win = win & is_raw[:, :, None] & is_raw[:, None, :]
     return mask | win[:, None]
+
+
+def add_pinned(mask: torch.Tensor, pinned: torch.Tensor) -> torch.Tensor:
+    """Dense counterpart of R7 in src/data/gist_flex_mask.py: pinned keys ([B, T] bool,
+    system prompt and tool definitions) are visible to every query (causal is applied
+    by the caller)."""
+    return mask | pinned[:, None, None, :]
 
 
 def make_hierarchical_gist_mask(
