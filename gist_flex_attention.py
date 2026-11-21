@@ -117,10 +117,10 @@ def prepare_gist_flex(
         if f.pinned is not None:  # pinned rows see their whole prefix: student = teacher
             out["gist_loss_rows"] &= ~f.pinned
         out["gist_input_ids"] = input_ids
-        # keys in no unit (pinned segments and the sink after them) are out of the routing
-        # labels; without segment labels the original labels are kept (sink in unit 0)
-        out["gist_route_exclude"] = None if f.pinned is None else (
-            f.pinned | ((f.level < 0) & (pos < f.sink_end[:, None])))
+        # keys in no unit (pinned segments, the sink) are out of the routing labels
+        from gist_routing import unit_exclude
+        out["gist_route_exclude"] = unit_exclude(
+            input_ids, gist_token_ids, attention_sink_size, f.pinned)
     return out
 
 

@@ -22,7 +22,7 @@ from typing import List, Optional
 import torch
 import torch.nn.functional as F
 
-from gist_routing import routing_kl
+from gist_routing import routing_kl, unit_exclude
 from gist_utils import Global_data
 from src.data.gist import make_hierarchical_gist_mask_greedy
 from src.data.gist_flex_mask import build_gist_mask_features, make_gist_mask_mod
@@ -278,6 +278,7 @@ def replay_attention(module, query, key, value, scaling):
                 Global_data.gist_token_id,
                 scaling,
                 None if beta is None else beta[0],
+                exclude=unit_exclude(st["ids"][:K], Global_data.gist_token_id, Global_data.sink_size),
             )
         )
     return out.transpose(1, 2).contiguous(), None

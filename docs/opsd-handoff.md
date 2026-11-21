@@ -189,6 +189,8 @@ spike 全部通过后按顺序执行；每一项的验收标准满足后才进�
 
 下一节的第 4 步（位置与老师）和第 5 步（多级 offload）已由 ADR 0001 取代；第 3 步（#14）推迟到质量测试阶段。
 
+**路由标签的变更（2026-11-21 起）。** 此前的路由 KL 把第一个 gist 之前的原始 token 都算进 0 号单元，包括 sink。在 S3 的 L = 2 checkpoint 上（8K），中后层的 sink 占 0 号单元标签的 25–45%，而 sink 永远可见、选它没有意义。现在阶段一和 OPSD 的路由 KL 都排除 sink 和受保护片段（`gist_routing.unit_exclude`）。已训练的 checkpoint 不受影响；`results/spikes.csv` 里 S3、S4b 及之前的路由相关结果都是旧标签下训练的，与之后的 run 比较时要用新标签重训对照组，复现旧结果请 checkout 之前的 commit。
+
 ## 下一阶段：深层树、decode 时的 gist 与 1M 上下文
 
 目标是支持 4–5 层的 gist 树、1M 上下文，并让 decode 生成的 token 也被压缩。代码层面的改动不大；决定成败的是三件事：逐级路由的误差随层数累积、32K 以外没有可用的老师、1M 时 summary 本身的 KV 放不进显存。父 issue 是 #11。

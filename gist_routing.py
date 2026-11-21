@@ -14,6 +14,19 @@ import torch
 import torch.nn.functional as F
 
 
+def unit_exclude(ids: torch.Tensor, gist_ids: Sequence[int], sink: int,
+                 pinned: Optional[torch.Tensor] = None) -> torch.Tensor:
+    """[..., K] bool: raw keys that belong to no unit, the pinned segment and the sink (the
+    first `sink` unpinned raw tokens, as src/data/gist_stream.py never chunks them). The
+    sink holds 25-45% of the attention mass in middle and late layers (0.5B, 8K), all of
+    which would otherwise land on unit 0 of every level although the sink is always
+    visible."""
+    raw = ~torch.isin(ids, torch.tensor(list(gist_ids), device=ids.device))
+    pin = torch.zeros_like(raw) if pinned is None else pinned.to(device=ids.device, dtype=torch.bool)
+    free = raw & ~pin
+    return pin | (free & (torch.cumsum(free.long(), -1) <= max(sink, 0)))
+
+
 def routing_kl(
     q: torch.Tensor,
     q_pos: torch.Tensor,

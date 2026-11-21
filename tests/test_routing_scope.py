@@ -85,3 +85,13 @@ def test_oracle_children_has_gradients():
     routing_kl(q, q_pos, k, ids, GIDS, 0.3, beta, scope="oracle_children", oracle_k=3).backward()
     is_sum = torch.isin(ids, torch.tensor(GIDS))
     assert k.grad[:, is_sum].abs().sum() > 0
+
+
+def test_unit_exclude_marks_pinned_and_sink():
+    from gist_routing import unit_exclude
+
+    ids = torch.tensor([7, 8, 9, 5, 6, 4, 3, 2, 1, GIDS[0], 11, 12])
+    pinned = torch.tensor([1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]).bool()
+    ex = unit_exclude(ids, GIDS, 3, pinned)
+    assert ex.tolist() == [True] * 6 + [False] * 6       # 3 pinned + the next 3 raw tokens
+    assert unit_exclude(ids, GIDS, 3).tolist() == [True] * 3 + [False] * 9
