@@ -1,0 +1,28 @@
+experiments/s5_run.sh
+  s_466735a13fa48a::t_d3c19dbb69f20b 1-25
+tests/test_deep_recall.py
+  s_466735a13fa48a::t_50e84832c45c97 1-5,7-32,34-35,37
+  s_466735a13fa48a::t_9ada71578f1143 33,36
+  s_466735a13fa48a::t_954c4799fb24d3 6
+experiments/deep_recall.py
+  s_466735a13fa48a::t_9ada71578f1143 46-51,156
+  s_466735a13fa48a::t_9f7db467f8617e 1-45,52-155,157-363
+experiments/nebius_supervise.sh
+  s_466735a13fa48a::t_d98fa27662b0c5 1-27
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "958036d3784d21d51edaab12e77c2b6a6ea16044",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
