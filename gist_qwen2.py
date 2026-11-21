@@ -1275,10 +1275,15 @@ class GistQwen2Model(Qwen2PreTrainedModel):
 
         if Global_data.train_attn == "flex":
             # gist_flex_attention.py: O(T) mask features instead of the [B,1,T,T] masks below.
-            if selective or seq_length == 1 or past_key_values_length > 0:
+            if selective or seq_length == 1:
                 raise NotImplementedError(
-                    "train_attn='flex' supports full-sequence, non-selective forward "
-                    "passes (continued pretraining) only")
+                    "train_attn='flex' supports non-selective forward passes over a whole "
+                    "sequence or an appended chunk (gist_session.py) only")
+            full_ids = kwargs.pop("gist_full_ids", None)  # [B, past + q], for an append
+            if past_key_values_length > 0 and (
+                    full_ids is None or full_ids.shape[1] != past_key_values_length + seq_length):
+                raise ValueError("an append onto a KV cache needs gist_full_ids, the cached "
+                                 "ids followed by input_ids")
             from gist_flex_attention import GIST_FLEX, prepare_gist_flex
             if self.config._attn_implementation != GIST_FLEX:
                 # Without it, dropping the masks below silently means plain causal attention.
@@ -1286,7 +1291,7 @@ class GistQwen2Model(Qwen2PreTrainedModel):
                     f"train_attn='flex' needs attn_implementation={GIST_FLEX!r}, "
                     f"got {self.config._attn_implementation!r}")
             kwargs.update(prepare_gist_flex(
-                input_ids,
+                input_ids if past_key_values_length == 0 else full_ids,
                 Global_data.gist_token_id,
                 Global_data.chunk_size[0],
                 Global_data.sink_size,
@@ -1296,6 +1301,7 @@ class GistQwen2Model(Qwen2PreTrainedModel):
                 pinned=kwargs.pop("gist_pinned", None),
                 turn=kwargs.pop("gist_turn", None),
                 window_turns=Global_data.window_turns,
+                q_offset=past_key_values_length,
             ))
             _attention_mask = None
             kwargs["causal_mask"] = None

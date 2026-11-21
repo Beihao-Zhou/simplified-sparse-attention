@@ -80,10 +80,13 @@ def prepare_gist_flex(
     pinned: Optional[torch.Tensor] = None,
     turn: Optional[torch.Tensor] = None,
     window_turns: int = 0,
+    q_offset: int = 0,
 ) -> dict:
     """Per-batch BlockMask and key permutation for all layers. Padding is found by
     pad_token_id; attention_mask is not read. pinned / turn ([B, T]) carry the segment
-    labels of agent trajectories (src/data/gist_flex_mask.py, R6 and R7)."""
+    labels of agent trajectories (src/data/gist_flex_mask.py, R6 and R7). With q_offset > 0
+    input_ids is the whole sequence and only its rows from q_offset on are queries: an
+    append onto a KV cache of q_offset tokens (gist_session.py)."""
     if pad_token_id is None:
         raise ValueError(f"{GIST_FLEX} needs pad_token_id to mask padded keys")
     f = build_gist_mask_features(
@@ -99,9 +102,11 @@ def prepare_gist_flex(
     perm = gist_pool_permutation(f)
     block_mask = make_gist_block_mask(
         f, input_ids.shape[1], block_size=block_size, kv_perm=perm,
-        compile_mask=input_ids.is_cuda,
+        compile_mask=input_ids.is_cuda, q_offset=q_offset,
     )
     out = {"gist_block_mask": block_mask, "gist_kv_perm": perm}
+    if Global_data.stage1 is not None and q_offset:
+        raise NotImplementedError("stage 1 trains on whole sequences, not appends")
     if Global_data.stage1 is not None:
         # Stage-1 teacher masks share the features and key order; loss rows are raw,
         # non-pad tokens past the sink.
@@ -138,6 +143,16 @@ def gist_flex_attention_forward(
     gist_kv_perm: Optional[torch.Tensor] = None,
     **kwargs,
 ):
+    if (gist_block_mask is None or gist_kv_perm is None) and query.shape[2] == 1 \
+            and attention_mask is not None:
+        # A decode step of a flex-built model (gist_session.py): layer 0 is plain attention
+        # over the gist-mask row; the other layers go through select_forward.
+        from gist_qwen2 import repeat_kv
+        hpg = query.shape[1] // key.shape[1]
+        out = torch.nn.functional.scaled_dot_product_attention(
+            query, repeat_kv(key, hpg), repeat_kv(value, hpg), attn_mask=attention_mask,
+            scale=scaling)
+        return out.transpose(1, 2).contiguous(), None
     if gist_block_mask is None or gist_kv_perm is None:
         raise ValueError(
             f"{GIST_FLEX} attention needs gist_block_mask and gist_kv_perm; set "
@@ -161,7 +176,13 @@ def gist_flex_attention_forward(
     q_in, k_in = query, key
     sb = getattr(module, "summary_bias", None)
     if sb is not None and getattr(module, "_bias_x", None) is not None:
-        beta = sb(module._bias_x, Global_data.lora_row_level)           # [B, H_kv, T]
+        beta = sb(module._bias_x, Global_data.lora_row_level)           # [B, H_kv, q]
+        if not module.training:
+            # An append (gist_session.py) scores the cached keys too: keep beta per layer, in
+            # the layout gist_lora.augment_with_beta extends at decode.
+            if query.shape[2] < T:
+                beta = torch.cat([module._beta_cache, beta.to(module._beta_cache.dtype)], dim=2)
+            module._beta_cache = beta
         beta_p = beta.gather(2, gist_kv_perm[:, None, :].expand(B, H_kv, T))
         if _CAPTURED_GRAD:
             hpg = query.shape[1] // H_kv

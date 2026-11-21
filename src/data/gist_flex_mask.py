@@ -287,16 +287,25 @@ def make_gist_block_mask(
     device: Optional[str] = None,
     kv_perm: Optional[torch.Tensor] = None,
     compile_mask: bool = False,
+    q_offset: int = 0,
 ):
     """BlockMask shared by all heads. Use compile_mask=True on GPU: otherwise the
-    mask is evaluated on the full T x T grid."""
-    return make_block_mask(make_gist_mask_mod(f, kv_perm=kv_perm), f.level.shape[0], seq_len,
-                           block_size, device or str(f.level.device), compile_mask)
+    mask is evaluated on the full T x T grid. q_offset > 0: only the query rows from
+    q_offset on (an append onto a cache of q_offset keys), against all seq_len keys."""
+    mod = make_gist_mask_mod(f, kv_perm=kv_perm)
+    if q_offset:
+        base = mod
+
+        def mod(b, h, q_idx, kv_idx):
+            return base(b, h, q_idx + q_offset, kv_idx)
+    return make_block_mask(mod, f.level.shape[0], seq_len, block_size,
+                           device or str(f.level.device), compile_mask, q_len=seq_len - q_offset)
 
 
 def make_block_mask(mask_mod, B: int, seq_len: int, block_size: int, device: str,
-                    compile_mask: bool = False):
-    """BlockMask for any of the mask_mods above (shared by all heads)."""
+                    compile_mask: bool = False, q_len: Optional[int] = None):
+    """BlockMask for any of the mask_mods above (shared by all heads); q_len rows (default
+    seq_len) against seq_len keys."""
     import torch._inductor.config as inductor_config
     from torch.nn.attention.flex_attention import create_block_mask
 
@@ -304,5 +313,6 @@ def make_block_mask(mask_mod, B: int, seq_len: int, block_size: int, device: str
     # mask to memory (16 GB at 128K) instead of fusing it into the block reduction.
     with inductor_config.patch(realize_opcount_threshold=10_000, realize_reads_threshold=10_000,
                                realize_acc_reads_threshold=10_000):
-        return create_block_mask(mask_mod, B, None, seq_len, seq_len, device=device,
+        return create_block_mask(mask_mod, B, None, seq_len if q_len is None else q_len, seq_len,
+                                 device=device,
                                  BLOCK_SIZE=block_size, _compile=compile_mask)
