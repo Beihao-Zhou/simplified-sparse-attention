@@ -148,7 +148,7 @@ def make_gist_mask_mod(
     Examples without summary tokens fall back to plain causal attention; padded keys
     are never visible.
     """
-    P, W = f.num_previous_chunks, f.raw_window
+    P = f.num_previous_chunks
     m = max_level
     window, pinned_k = _window_and_pinned(f, kv_perm)
     top = f.num_levels - 1 if m is None else m - 1
