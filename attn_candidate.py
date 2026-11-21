@@ -1204,6 +1204,10 @@ def attn_dispatcher(
     force_ref = os.environ.get("ATTN_IMPL", "sparse") == "ref"
     if decode and query.shape[2] == 1 and _decoding_summary(kwargs.get("tmp_ids")):
         return _summary_query_decode(module, query, key, value, attention_mask, scaling)
+    if decode and query.shape[2] == 1 and os.environ.get("DECODE_SELECT") == "beam":
+        # Level-wise beam selection (gist_beam.py, ADR 0001/0002); eager reference for now.
+        from gist_beam import beam_decode
+        return beam_decode(module, query, key, value, kwargs["tmp_ids"], scaling)
     if getattr(module, "summary_bias", None) is not None and not module.training:
         # Trained per-summary bias (gist_lora.SummaryBias), folded into q/k (ref path only).
         from gist_lora import augment_with_beta

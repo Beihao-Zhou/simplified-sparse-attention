@@ -1,6 +1,7 @@
 """Huggingface LLaMA with gist token support."""
 
 
+import os
 import math
 from typing import List, Optional, Tuple, Union, Callable
 import copy
@@ -682,7 +683,12 @@ class GistLlamaAttention(LlamaAttention):
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
             key_states, value_states = past_key_values.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
-        if decode:
+        if decode and os.environ.get("DECODE_SELECT") == "beam":
+            # Level-wise beam selection, shared with gist_qwen2 via attn_dispatcher.
+            from gist_beam import beam_decode
+            attn_output, attn_weights = beam_decode(
+                self, query_states, key_states, value_states, kwargs["tmp_ids"], self.scaling)
+        elif decode:
             attention_interface: Callable = eager_attention_forward_decoding
             attn_output, attn_weights = attention_interface(
                 self,

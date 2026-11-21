@@ -74,8 +74,11 @@ def test_flex_mask_equals_dense_reference(levels, window, turns_back):
         ids, pinned, turn = _inputs(rng, levels, n_pinned, 8, pad)
         gist = GIST_IDS[:levels]
         T = ids.shape[1]
+        # the sink is the first 3 unpinned raw tokens: with a pinned prefix it ends at
+        # absolute position pad + n_pinned + 3 (left padding counts as positions)
         dense = make_hierarchical_gist_mask_greedy(
-            ids, gist, 4, attention_sink_size=3, num_previous_chunks=1, pad_token=PAD)
+            ids, gist, 4, attention_sink_size=pad + n_pinned + 3 if n_pinned else 3,
+            num_previous_chunks=1, pad_token=PAD)
         dense = add_raw_window(dense, ids, gist, window, PAD, turn=turn, window_turns=turns_back)
         dense = add_pinned(dense, pinned)
         expected = dense[:, 0] & torch.ones(T, T, dtype=torch.bool).tril()

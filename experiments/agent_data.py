@@ -12,6 +12,8 @@ Message boundaries come from rendering message prefixes: message i spans from th
 longest common prefix of render(m[:i]) and render(m[:i+1]); no template markers are
 parsed. Output is two `datasets` directories (train / heldout, split by issue so one
 issue never lands in both) with input_ids (raw, no summaries), pinned, turn, length.
+Each row group is written as soon as it is done (<out>/parts/rgNN/...) and skipped on a
+rerun, so a preempted run continues; the splits are assembled at the end.
 
     python experiments/agent_data.py --out ~/agent_data --row_groups 0 1
 """
@@ -128,10 +130,12 @@ def main():
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
     pool = mp.get_context("spawn").Pool(args.workers, _init, (args.model,))
     pf = pq.ParquetFile(HfFileSystem().open(f"datasets/{REPO}/trajectories.parquet"))
-    rows = {"train": collections.defaultdict(list), "heldout": collections.defaultdict(list)}
-    audit = collections.Counter()
-    tool_chars = []
+    out_dir = os.path.expanduser(args.out)
     for rg in args.row_groups:
+        part = os.path.join(out_dir, "parts", f"rg{rg:02d}")
+        if os.path.exists(os.path.join(part, "stats.json")):
+            print(f"row group {rg}: done before", flush=True)
+            continue
         path = os.path.join(os.path.expanduser(args.cache), f"rg{rg:02d}.parquet") if args.cache else ""
         if path and os.path.exists(path):
             table = pq.read_table(path)
@@ -141,35 +145,45 @@ def main():
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 pq.write_table(table, path)
         n = table.num_rows if not args.max_rows else min(args.max_rows, table.num_rows)
-        for traj, inst, resolved, ids, pinned, turn, (tc, clipped) in pool.imap(
+        rows = {"train": collections.defaultdict(list), "heldout": collections.defaultdict(list)}
+        tool_chars, clipped = [], 0
+        for traj, inst, resolved, ids, pinned, turn, (tc, cl) in pool.imap(
             convert, table.slice(0, n).to_pylist(), chunksize=4
         ):
             tool_chars += tc
-            audit["tool_msgs"] += len(tc)
-            audit["tool_clipped"] += clipped
-            split = "heldout" if heldout(inst, args.heldout_frac) else "train"
-            d = rows[split]
-            d["input_ids"].append(ids)
-            d["pinned"].append(pinned)
-            d["turn"].append(turn)
-            d["length"].append(len(ids))
-            d["n_pinned"].append(int(sum(pinned)))
-            d["n_turns"].append(turn[-1])
-            d["trajectory_id"].append(traj)
-            d["instance_id"].append(inst)
-            d["resolved"].append(resolved)
+            clipped += cl
+            d = rows["heldout" if heldout(inst, args.heldout_frac) else "train"]
+            for key, val in (("input_ids", ids), ("pinned", pinned), ("turn", turn),
+                             ("length", len(ids)), ("n_pinned", int(sum(pinned))),
+                             ("n_turns", turn[-1]), ("trajectory_id", traj),
+                             ("instance_id", inst), ("resolved", resolved)):
+                d[key].append(val)
+        for split, d in rows.items():
+            if d:
+                datasets.Dataset.from_dict(dict(d)).save_to_disk(os.path.join(part, split))
+        json.dump({"length": rows["train"]["length"] + rows["heldout"]["length"],
+                   "n_pinned": rows["train"]["n_pinned"] + rows["heldout"]["n_pinned"],
+                   "split": [len(rows["train"]["length"]), len(rows["heldout"]["length"])],
+                   "tool_chars": tool_chars, "clipped": clipped},
+                  open(os.path.join(part, "stats.json"), "w"))
         print(f"row group {rg}: {n} rows", flush=True)
-    for split, d in rows.items():
-        if not d:
-            continue
-        datasets.Dataset.from_dict(dict(d)).save_to_disk(os.path.join(os.path.expanduser(args.out), split))
-    L = np.array(rows["train"]["length"] + rows["heldout"]["length"])
-    P = np.array(rows["train"]["n_pinned"] + rows["heldout"]["n_pinned"])
-    tc = np.array(tool_chars)
+    stats = [json.load(open(os.path.join(out_dir, "parts", f"rg{rg:02d}", "stats.json")))
+             for rg in args.row_groups]
+    for split in ("train", "heldout"):
+        parts = [os.path.join(out_dir, "parts", f"rg{rg:02d}", split) for rg in args.row_groups]
+        parts = [datasets.load_from_disk(x) for x in parts if os.path.exists(x)]
+        if parts:
+            datasets.concatenate_datasets(parts).save_to_disk(os.path.join(out_dir, split))
+    train_n = sum(s["split"][0] for s in stats)
+    held_n = sum(s["split"][1] for s in stats)
+    L = np.array([x for s in stats for x in s["length"]])
+    P = np.array([x for s in stats for x in s["n_pinned"]])
+    tc = np.array([x for s in stats for x in s["tool_chars"]])
+    audit = {"tool_msgs": int(tc.size), "tool_clipped": sum(s["clipped"] for s in stats)}
     report = {
         "trajectories": int(L.size),
-        "train": len(rows["train"]["length"]),
-        "heldout": len(rows["heldout"]["length"]),
+        "train": train_n,
+        "heldout": held_n,
         "tokens_p50_p90_max": [int(np.percentile(L, 50)), int(np.percentile(L, 90)), int(L.max())],
         "frac_over_32K": float((L > 32768).mean()),
         "frac_over_128K": float((L > 131072).mean()),

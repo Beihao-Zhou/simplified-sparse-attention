@@ -106,6 +106,16 @@ def build_gist_mask_features(
         sink_end = torch.full((B,), max(attention_sink_size, 0), dtype=torch.long, device=device)
 
     is_pad = (inputs == pad_token) if pad_token is not None else torch.zeros_like(inputs, dtype=torch.bool)
+    if pinned is not None and attention_sink_size >= 0:
+        # The inserter's sink is the first unpinned raw tokens (src/data/gist_stream.py), so
+        # with a pinned prefix it ends after the attention_sink_size-th of them, not at that
+        # absolute position (assumes the pinned segment is a prefix, as in agent data).
+        pin = pinned.to(device=device, dtype=torch.bool)
+        c = ((level < 0) & ~pin & ~is_pad).long().cumsum(-1)
+        hit = c >= max(attention_sink_size, 1)
+        first = torch.where(hit.any(-1), hit.int().argmax(-1), torch.full((B,), T - 1, device=device))
+        sink_end = torch.where(torch.tensor(attention_sink_size > 0, device=device),
+                               first + 1, (c == 0).sum(-1).to(first.dtype))
     return GistMaskFeatures(
         level=level.int(), close=close.int(), par=par.int(), par_p=par_p.int(), start=start.int(),
         sink_end=sink_end.int(), has_gist=(level >= 0).any(-1), is_pad=is_pad,

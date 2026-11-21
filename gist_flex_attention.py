@@ -117,6 +117,10 @@ def prepare_gist_flex(
         if f.pinned is not None:  # pinned rows see their whole prefix: student = teacher
             out["gist_loss_rows"] &= ~f.pinned
         out["gist_input_ids"] = input_ids
+        # keys in no unit (pinned segments and the sink after them) are out of the routing
+        # labels; without segment labels the original labels are kept (sink in unit 0)
+        out["gist_route_exclude"] = None if f.pinned is None else (
+            f.pinned | ((f.level < 0) & (pos < f.sink_end[:, None])))
     return out
 
 
@@ -184,11 +188,12 @@ def gist_flex_attention_forward(
                             kwargs["gist_loss_rows"], st)
     if st.get("route_rows", 0) > 0 and module.layer_idx > 0:
         _stage1_routing(module, query, key_orig, beta, kwargs["gist_input_ids"],
+                        kwargs["gist_route_exclude"],
                         kwargs["gist_loss_rows"], scaling, st)
     return out, None
 
 
-def _stage1_routing(module, query, key, beta, input_ids, rows, scaling, st):
+def _stage1_routing(module, query, key, beta, input_ids, exclude, rows, scaling, st):
     """Routing KL on st["route_rows"] random loss rows per sequence (layer 0 excluded)."""
     from gist_qwen2 import repeat_kv
     from gist_routing import routing_kl
@@ -201,7 +206,9 @@ def _stage1_routing(module, query, key, beta, input_ids, rows, scaling, st):
         pick = cand[perm].sort().values
         bt = None if beta is None else beta[b].repeat_interleave(hpg, 0)
         st["losses"].setdefault("route", []).append(routing_kl(
-            query[b][:, pick], pick, k[b], input_ids[b], Global_data.gist_token_id, scaling, bt))
+            query[b][:, pick], pick, k[b], input_ids[b], Global_data.gist_token_id, scaling, bt,
+            exclude=None if exclude is None else exclude[b],
+            scope=st.get("route_scope", "level"), oracle_k=st.get("route_oracle_k", 256)))
 
 
 def fold_beta(query: torch.Tensor, key: torch.Tensor, beta: torch.Tensor, scaling: float):

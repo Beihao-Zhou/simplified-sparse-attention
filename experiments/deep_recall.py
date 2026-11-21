@@ -2,21 +2,25 @@
 
 Contexts are held-out documents concatenated to --lens raw tokens, with a pass key at a
 given depth and the question at the end. One gist prefill (flex, no unfolding) records
-q/k/v/beta at --layers; for each of the last --q_rows raw positions and each head, the
-top-down selection of the eager decode path (gist_qwen2.eager_attention_forward_decoding:
-per level keep the top kk = min(beam, G_l // 4) children of the kept nodes, scored by
-q . k without beta) is replayed offline under several beam schedules and compared with
-the oracle: the top-k0 level-0 units by the query's softmax mass over raw keys.
+q/k/v/beta at --layers. For each of the last --q_rows raw positions the selection is
+replayed offline and compared with the oracle, the top-k0 level-0 units by the query's
+softmax mass over raw keys (k0 = the inference leaf budget). Strategies:
+
+    default    the existing eager decode rule (gist_qwen2.eager_attention_forward_decoding):
+               per head, keep min(top_k[l], G_l // 4) children of the kept nodes (q . k)
+    flat       per head, the top-k0 level-0 summaries directly, no tree
+    beam_*     DECODE_SELECT=beam through its reference (gist_beam.py), per KV group:
+               256 nodes per level above the leaves, k0 leaves; union or sumexp merge; with
+               _coarse the unselected candidates stay as coarse terms (exact partition)
 
 Per strategy and level l (L-1 = top ... 0 = leaves):
     recall[l]  oracle units whose level-l ancestor was kept
     mass[l]    compressed-region raw mass under the kept level-l nodes
-    hit_head   pass-key unit selected (mean over heads); hit_group: any head of a GQA group
+    hit_head   pass-key unit selected (mean over heads, or over groups for beam_*);
+               hit_group: any head / group
     cost       gist scores computed / number of level-0 units
-    err_sel    ||o - o_full|| / ||o_full||, o over the kept keys (selected raw units, selected
-               summaries, the raw keys outside the compressed region), o_full over all raw keys
-    err_coarse same with the unselected siblings at every level kept as coarse terms (with
-               beta), which partitions the compressed region (RecSA-style)
+    err        ||o - o_full|| / ||o_full||, o over the visible keys of the strategy, o_full
+               causal attention over all raw keys
 
     python experiments/deep_recall.py --ckpts runs/s5_L2/adapters.pt runs/s5_L4/adapters.pt \
         --out results/s5_recall.jsonl
@@ -36,6 +40,7 @@ import datasets  # noqa: E402
 import torch  # noqa: E402
 from transformers import AttentionInterface, AutoTokenizer  # noqa: E402
 
+import gist_beam as gb  # noqa: E402
 import gist_flex_attention  # noqa: E402
 from gist_lora import apply_lora, apply_summary_bias, summary_spans  # noqa: E402
 from gist_qwen2 import GistQwen2ForCausalLM, repeat_kv  # noqa: E402
@@ -47,9 +52,13 @@ STRATEGIES = {
     # Inference keeps min(top_k[l], G_l // 4): top_k[1] = top_k[0] = k0, 3 above. The wider
     # beams drop the G_l // 4 cap, which alone bounds every level to a quarter of its nodes.
     "default": lambda l, k0, G: min(k0 if l <= 1 else 3, max(1, G // 4)),
-    "beam_x4": lambda l, k0, G: k0 if l <= 1 else 12,
-    "beam_256": lambda l, k0, G: max(k0, 256),
     "flat": None,  # top-k0 level-0 summaries directly, no tree
+}
+# The beam rule of DECODE_SELECT=beam, through its reference (gist_beam.py): 256 nodes per
+# level above the leaves, the inference leaf budget k0 at level 0; per KV group.
+BEAM = {
+    f"beam_{merge}{'_coarse' if coarse else ''}": (merge, coarse)
+    for merge in ("union", "sumexp") for coarse in (False, True)
 }
 NEEDLE = "The pass key is {key}. Remember it. {key} is the pass key. "
 QUESTION = "\n\nWhat is the pass key? The pass key is"
@@ -168,8 +177,10 @@ def analyze(rec, ids, key_pos, gist_ids, sink, scaling, rows):
     lvl, gpos, unit, raw_all = tree(ids, gist_ids, sink)
     L = len(gist_ids)
     out = collections.defaultdict(lambda: collections.defaultdict(list))
+    btree = gb.build_tree(ids, gist_ids, sink)
     for layer, (Q, K, V, beta) in rec.items():
         H, hpg = Q.shape[0], Q.shape[0] // K.shape[0]
+        Kg, Vg = K, V                                       # [H_kv, T, d] for gist_beam
         K, V = repeat_kv(K[None], hpg)[0], repeat_kv(V[None], hpg)[0]
         B = None if beta is None else beta.repeat_interleave(hpg, 0)  # [H, T]
         for r, p in enumerate(rows):
@@ -198,7 +209,7 @@ def analyze(rec, ids, key_pos, gist_ids, sink, scaling, rows):
             for name, beam in STRATEGIES.items():
                 rc = [[] for _ in range(L)]
                 ms = [[] for _ in range(L)]
-                hit, cost, e_sel, e_coarse = [], [], [], []
+                hit, cost, e_sel = [], [], []
                 keep_heads = []
                 for h in range(H):
                     oracle = torch.topk(m0[h], k0).indices
@@ -225,26 +236,47 @@ def analyze(rec, ids, key_pos, gist_ids, sink, scaling, rows):
                     for l in levels:
                         gist_keep[gpos[l][sel[l]]] = True
                     e_sel.append(_err(s[h], scaling, keep | gist_keep, gist_keep, B, h, V[h], o_full[h], p))
-                    if beam is not None:
-                        coarse = gist_keep.clone()
-                        for l in levels:
-                            coarse[gpos[l][cands[l]]] = True  # unselected siblings: coarse terms
-                        e_coarse.append(
-                            _err(s[h], scaling, keep | coarse, coarse, B, h, V[h], o_full[h], p)
-                        )
                 rec_ = out[(layer, name)]
                 rec_["recall"].append([sum(x) / len(x) if x else None for x in rc])
                 rec_["mass"].append([sum(x) / len(x) if x else None for x in ms])
                 rec_["cost"].append(sum(cost) / H)
                 rec_["err_sel"].append(sum(e_sel) / H)
-                if e_coarse:
-                    rec_["err_coarse"].append(sum(e_coarse) / H)
                 if key_units.numel():
                     rec_["hit_head"].append(sum(hit) / H)
                     grp = torch.stack(keep_heads).view(H // hpg, hpg, -1).any(1)
                     rec_["hit_group"].append(
                         float(any(bool(g[torch.isin(leaf, key_units)].any()) for g in grp))
                     )
+            for name, (merge, coarse) in BEAM.items():
+                cfg = gb.BeamConfig(k=(k0, 256), merge=merge, coarse=coarse)
+                rc = [[] for _ in range(L)]
+                ms = [[] for _ in range(L)]
+                hit, cost, err = [], 0.0, []
+                for g in range(H // hpg):
+                    hs = slice(g * hpg, (g + 1) * hpg)
+                    bg = None if beta is None else beta[g]
+                    sb = gb.select(btree, Q[hs, r : r + 1], Kg[g], bg, torch.tensor([p], device=ids.device),
+                                   cfg, scaling, prev_chunks=Global_data.num_previous_chunks)
+                    vis = gb.visible(btree, sb, coarse)
+                    o = gb.attend(Q[hs, r : r + 1], Kg[g], Vg[g], vis, scaling, bg)[:, 0]
+                    cost += sum(int(c.sum()) for c in sb.cand) / G[0] * hpg
+                    sel = [torch.nonzero(x[0]).flatten() for x in sb.sel]
+                    for h in range(g * hpg, (g + 1) * hpg):
+                        oracle = torch.topk(m0[h], k0).indices
+                        for l in range(L):
+                            rc[l].append(float(torch.isin(anc[l][oracle], sel[l]).float().mean()))
+                            ms[l].append(float(m0[h][torch.isin(anc[l], sel[l])].sum() / M[h]))
+                        err.append(float((o[h - g * hpg] - o_full[h]).norm() / o_full[h].norm().clamp_min(1e-30)))
+                    if key_units.numel():
+                        hit.append(bool(torch.isin(key_units, sel[0]).any()))
+                rec_ = out[(layer, name)]
+                rec_["recall"].append([sum(x) / len(x) for x in rc])
+                rec_["mass"].append([sum(x) / len(x) for x in ms])
+                rec_["cost"].append(cost / H)
+                rec_["err_sel"].append(sum(err) / H)
+                if hit:
+                    rec_["hit_head"].append(sum(hit) / len(hit))
+                    rec_["hit_group"].append(float(any(hit)))
     return out
 
 
@@ -270,7 +302,7 @@ def summary(path):
     groups = collections.defaultdict(list)
     for r in rows:
         groups[(r["ckpt"], r["levels"], r["n_raw"], r["strategy"])].append(r)
-    print(f"{'ckpt':28s} L  len   strategy   recall[top..leaf]            mass(leaf) hit_g cost  err_sel err_coarse")
+    print(f"{'ckpt':28s} L  len   strategy   recall[top..leaf]            mass(leaf) hit_g cost  err")
     for (ck, L, n, st), rs in sorted(groups.items()):
         rc = mean_lists([r["recall"] for r in rs])
         ms = mean_lists([r["mass"] for r in rs])
@@ -278,7 +310,7 @@ def summary(path):
         rcs = " ".join("  -  " if v is None else f"{v:.3f}" for v in rc[::-1])
         print(
             f"{ck[-28:]:28s} {L}  {n // 1024:3d}K {st:10s} {rcs:28s} {ms[0]:.3f}      "
-            f"{f('hit_group'):.2f}  {f('cost'):.3f} {f('err_sel'):.3f}   {f('err_coarse'):.3f}"
+            f"{f('hit_group'):.2f}  {f('cost'):.3f} {f('err_sel'):.3f}"
         )
 
 
@@ -349,7 +381,7 @@ def main():
                             "recall": mean_lists(v["recall"]),
                             "mass": mean_lists(v["mass"]),
                         }
-                        for k in ("cost", "err_sel", "err_coarse", "hit_head", "hit_group"):
+                        for k in ("cost", "err_sel", "hit_head", "hit_group"):
                             if v[k]:
                                 rec[k] = sum(v[k]) / len(v[k])
                         out.write(json.dumps(rec) + "\n")

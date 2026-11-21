@@ -59,6 +59,14 @@ def parse_args(argv=None):
     )
     ap.add_argument("--lambda_route", type=float, default=0.0)
     ap.add_argument("--route_rows", type=int, default=32, help="sampled query rows per sequence")
+    ap.add_argument(
+        "--route_scope",
+        choices=["level", "oracle_children"],
+        default="level",
+        help="routing KL over every closed unit of a level, or only over the children of the "
+        "oracle parents (gist_routing.py)",
+    )
+    ap.add_argument("--route_oracle_k", type=int, default=256)
     ap.add_argument("--per_level", action="store_true", help="one gist LoRA per summary level")
     ap.add_argument(
         "--phase2_at",
@@ -148,6 +156,8 @@ def stage1_config(args, pairs=None, down=None):
         "down": down or args.down,
         "lambda_ntp": args.lambda_ntp,
         "route_rows": args.route_rows if args.lambda_route > 0 else 0,
+        "route_scope": getattr(args, "route_scope", "level"),
+        "route_oracle_k": getattr(args, "route_oracle_k", 256),
         "weights": {"route": args.lambda_route},
     }
 
