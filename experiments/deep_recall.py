@@ -190,7 +190,7 @@ def analyze(rec, ids, key_pos, gist_ids, sink, scaling, rows):
             key_units = leaf[torch.tensor(key_pos, device=ids.device)].unique()
             key_units = key_units[key_units < G[0]]
             k0 = min((p + 1) // 448 + 1, G[0] // 4)
-            s = Q[:, r] @ K[:, : p + 1].T  # [H, p+1], unscaled
+            s = torch.einsum("hd,hkd->hk", Q[:, r], K[:, : p + 1])  # [H, p+1], unscaled
             m = (s * scaling).masked_fill(~raw, float("-inf")).softmax(-1)
             m0 = torch.zeros(H, G[0], device=ids.device).index_add_(1, leaf[comp], m[:, comp])
             M = m0.sum(-1).clamp_min(1e-30)
