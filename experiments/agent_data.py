@@ -85,6 +85,25 @@ def label(tok, messages, tools):
     return ids, pinned, turn
 
 
+_TOK = None
+
+
+def _init(model):
+    global _TOK
+    from transformers import AutoTokenizer
+
+    _TOK = AutoTokenizer.from_pretrained(model)
+
+
+def convert(r):
+    """One parquet row -> (labelled tokens, tool-message stats), in a worker process."""
+    msgs = messages_of(r)
+    tools = [m["content"] for m in msgs if m["role"] == "tool"]
+    ids, pinned, turn = label(_TOK, msgs, _strip_none(r["tools"]))
+    stats = ([len(c) for c in tools], sum(any(x in c for x in CLIPPED) for c in tools))
+    return r["trajectory_id"], r["instance_id"], int(r["resolved"] or 0), ids, pinned, turn, stats
+
+
 def heldout(instance_id, frac):
     return int(hashlib.sha1(instance_id.encode()).hexdigest(), 16) % 10_000 < frac * 10_000
 
@@ -97,14 +116,17 @@ def main():
     ap.add_argument("--max_rows", type=int, default=0, help="per row group, 0 = all")
     ap.add_argument("--heldout_frac", type=float, default=0.02)
     ap.add_argument("--cache", default="", help="directory to keep downloaded row groups in")
+    ap.add_argument("--workers", type=int, default=os.cpu_count())
     args = ap.parse_args()
+
+    import multiprocessing as mp
 
     import datasets
     import pyarrow.parquet as pq
     from huggingface_hub import HfFileSystem
-    from transformers import AutoTokenizer
 
-    tok = AutoTokenizer.from_pretrained(args.model)
+    os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+    pool = mp.get_context("spawn").Pool(args.workers, _init, (args.model,))
     pf = pq.ParquetFile(HfFileSystem().open(f"datasets/{REPO}/trajectories.parquet"))
     rows = {"train": collections.defaultdict(list), "heldout": collections.defaultdict(list)}
     audit = collections.Counter()
@@ -119,15 +141,13 @@ def main():
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 pq.write_table(table, path)
         n = table.num_rows if not args.max_rows else min(args.max_rows, table.num_rows)
-        for r in table.slice(0, n).to_pylist():
-            msgs = messages_of(r)
-            for m in msgs:
-                if m["role"] == "tool":
-                    tool_chars.append(len(m["content"]))
-                    audit["tool_msgs"] += 1
-                    audit["tool_clipped"] += any(c in m["content"] for c in CLIPPED)
-            ids, pinned, turn = label(tok, msgs, _strip_none(r["tools"]))
-            split = "heldout" if heldout(r["instance_id"], args.heldout_frac) else "train"
+        for traj, inst, resolved, ids, pinned, turn, (tc, clipped) in pool.imap(
+            convert, table.slice(0, n).to_pylist(), chunksize=4
+        ):
+            tool_chars += tc
+            audit["tool_msgs"] += len(tc)
+            audit["tool_clipped"] += clipped
+            split = "heldout" if heldout(inst, args.heldout_frac) else "train"
             d = rows[split]
             d["input_ids"].append(ids)
             d["pinned"].append(pinned)
@@ -135,9 +155,9 @@ def main():
             d["length"].append(len(ids))
             d["n_pinned"].append(int(sum(pinned)))
             d["n_turns"].append(turn[-1])
-            d["trajectory_id"].append(r["trajectory_id"])
-            d["instance_id"].append(r["instance_id"])
-            d["resolved"].append(int(r["resolved"] or 0))
+            d["trajectory_id"].append(traj)
+            d["instance_id"].append(inst)
+            d["resolved"].append(resolved)
         print(f"row group {rg}: {n} rows", flush=True)
     for split, d in rows.items():
         if not d:
