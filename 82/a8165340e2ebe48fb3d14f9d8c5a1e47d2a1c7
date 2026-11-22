@@ -1,0 +1,21 @@
+kernels/beam_select.py
+  s_466735a13fa48a::t_23c639dabb2ec7 52-56,58,60,62-95
+  s_466735a13fa48a::t_5eb0d1d231d615 149-153
+  s_466735a13fa48a::t_247f1485cabcac 7-11
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "82a8165340e2ebe48fb3d14f9d8c5a1e47d2a1c7",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
