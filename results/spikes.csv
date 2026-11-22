@@ -104,3 +104,13 @@ E2,task_ctl_route_data,0,passkey8k_acc,0.0,f266595,2026-11-20
 E2,task_ctl_route_data,0,triviaqa4k_contain,0.24,f266595,2026-11-20
 E2,task_ctl_route_data,0,hotpotqa4k_contain,0.06,f266595,2026-11-20
 E2,task_ctl_route_data,0,2wikimqa4k_contain,0.18,f266595,2026-11-20
+G1,A_decode,0,suffix_kl_8192,0.7759,f5c8313,2026-11-22
+G1,A_decode,0,passkey_front,0.200,f5c8313,2026-11-22
+G1,A_all,0,suffix_kl_8192,0.7353,f5c8313,2026-11-22
+G1,A_all,0,passkey_front,0.267,f5c8313,2026-11-22
+G1,B_decode,0,suffix_kl_8192,0.4141,f5c8313,2026-11-22
+G1,B_decode,0,passkey_front,0.000,f5c8313,2026-11-22
+G1,B_all,0,suffix_kl_8192,0.3845,f5c8313,2026-11-22
+G1,B_all,0,passkey_front,0.133,f5c8313,2026-11-22
+G1,A_train,0,median_sec_per_step_8k,21.6,f5c8313,2026-11-22
+G1,B_train,0,median_sec_per_step_8k,47.75,f5c8313,2026-11-22
