@@ -130,8 +130,11 @@ def beam_decode_fast(module, query, key, value, src, scaling, cfg):
     K = key[0].contiguous()
     levels = select_fast(meta, query[0, :, 0].view(num_kv, hpg, -1), K, beta, cfg, scaling)
     idx = key_list(meta, levels, cfg.coarse)
+    # ~128 keys per split: 8 splits left a 12K-key list (an agent prompt's pinned part and
+    # raw window) on 16 blocks, 1.9 ms per layer at 158K on an H200
+    nsplit = max(8, min(256, -(-idx.shape[1] // 128)))
     out = ext().beam_decode_attn(query.contiguous(), key.contiguous(), value.contiguous(), idx,
-                                 beta, scaling, 8)
+                                 beta, scaling, nsplit)
     module._beam_levels = levels
     rec = Global_data.opsd_record
     if rec is not None:  # OPSD rollout: the keys this layer attended to (gist_opsd_long.py)
