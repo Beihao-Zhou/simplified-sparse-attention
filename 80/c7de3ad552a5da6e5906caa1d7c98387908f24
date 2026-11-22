@@ -1,0 +1,23 @@
+experiments/agent_longeval.py
+  s_466735a13fa48a::t_1e62ae0b6240b4 9-12,28-40,78,85-89
+tests/test_agent_longeval.py
+  s_466735a13fa48a::t_1e62ae0b6240b4 60-73
+experiments/agent_data.py
+  s_466735a13fa48a::t_1e62ae0b6240b4 119-122,175-183
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "80c7de3ad552a5da6e5906caa1d7c98387908f24",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
