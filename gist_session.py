@@ -132,6 +132,37 @@ class GistSession:
                 and type(m).__name__ == "GistQwen2ForCausalLM" and getattr(m, "selective", False)
                 and m.model.embed_tokens.weight.dtype == torch.bfloat16)
 
+    def _decode_graph(self, ids, vis) -> torch.Tensor:
+        """A raw decode row with each layer's dense part replayed from a CUDA graph
+        (_DecodeGraphs); the cache update and attention run between them. Same kernels as
+        _decode_fast, bit-identical (tests/test_beam_kernels.py)."""
+        from gist_beam import beam_decode
+        from gist_beam_cuda import row_decode
+
+        g = Global_data
+        G = getattr(self.model, "_decode_graphs", None)
+        if G is None:
+            G = self.model._decode_graphs = _DecodeGraphs(self.model)
+        rope_pos = g.last_pos + 1
+        g.last_pos = rope_pos
+        G.tok.copy_(ids[:, -1:])
+        G.pos.copy_(rope_pos)
+        G.graphs[0].replay()
+        rec = g.opsd_record
+        layers = self.model.model.layers
+        for li in range(G.L):
+            a = layers[li].self_attn
+            k, v = self.past.update(G.k[li], G.v[li], li, {"sin": G.sin, "cos": G.cos})
+            if li == 0:
+                o, idx = row_decode(G.q[li], k, v, vis, None, a.scaling)
+                if rec is not None:
+                    rec[0] = idx
+            else:
+                o, _ = beam_decode(a, G.q[li], k, v, ids, a.scaling)
+            G.o[li].copy_(o)
+            G.graphs[li + 1].replay()
+        return G.logits.clone()  # the next replay overwrites it
+
     def _decode_fast(self, i: int, ids, vis) -> torch.Tensor:
         """Fed token i through the layers as model.forward would on the beam path, without
         its per-step O(T) work (the [T] causal and additive masks, the tmp_ids concatenation,
@@ -144,10 +175,14 @@ class GistSession:
         from gist_beam_cuda import row_decode
         from gist_lora import extend_beta_cache
 
+        import os
+
         g = Global_data
         m = self.model.model
         tok = self.ids[i]
         summ = tok in self.gist_ids
+        if not summ and os.environ.get("GIST_DECODE_GRAPH", "1") == "1":
+            return self._decode_graph(ids, vis)
         x = m.embed_tokens(ids[:, -1:])
         if g.lora_active:
             g.lora_row_mask = torch.tensor([[summ]], device=self.device)
@@ -225,3 +260,76 @@ class GistSession:
             Global_data.beam_incremental = None
             Global_data.opsd_record = None
         return logits
+
+
+class _DecodeGraphs:
+    """CUDA graphs of the dense part of a raw decode row (#25), kept on the model: graph 0
+    is the embedding, RoPE and layer 0's pre-attention part (norm, q/k/v, RoPE); graph
+    i (1..L) is layer i-1's post-attention part (o_proj, residual, norm, MLP, residual)
+    and layer i's pre-attention part, the last one the final norm and lm_head. Inputs and
+    outputs are static tensors; the attention between them runs eagerly, so the shapes
+    that grow with the sequence stay out of the graphs. Weights updated in place (the
+    optimizer) are seen by the graphs; a raw row has no gist LoRA delta and no beta."""
+
+    def __init__(self, model):
+        from transformers.models.qwen2.modeling_qwen2 import apply_rotary_pos_emb
+
+        g = Global_data
+        m = model.model
+        self.L = m.config.num_hidden_layers
+        layers = m.layers[: self.L]
+        dev = m.embed_tokens.weight.device
+        a0 = layers[0].self_attn
+        H, Hkv, D = m.config.num_attention_heads, m.config.num_key_value_heads, a0.head_dim
+        self.tok = torch.zeros(1, 1, dtype=torch.long, device=dev)
+        self.pos = torch.zeros(1, 1, dtype=torch.long, device=dev)
+        dt = m.embed_tokens.weight.dtype
+        self.o = [torch.zeros(1, 1, H, D, dtype=dt, device=dev) for _ in range(self.L)]
+        self.q, self.k, self.v, res = [None] * self.L, [None] * self.L, [None] * self.L, [None] * self.L
+
+        def pre(li, x):
+            a = layers[li].self_attn
+            h = layers[li].input_layernorm(x)
+            shape = (1, 1, -1, a.head_dim)
+            q = a.q_proj(h).view(shape).transpose(1, 2)
+            k = a.k_proj(h).view(shape).transpose(1, 2)
+            v = a.v_proj(h).view(shape).transpose(1, 2)
+            self.q[li], self.k[li] = apply_rotary_pos_emb(q, k, self.cos, self.sin)
+            self.v[li], res[li] = v, x
+
+        def first():
+            x = m.embed_tokens(self.tok)
+            self.cos, self.sin = m.rotary_emb(x, self.pos)
+            pre(0, x)
+
+        def piece(li):  # post of layer li - 1, then pre of layer li (or the head)
+            def run():
+                lay = layers[li - 1]
+                x = res[li - 1] + lay.self_attn.o_proj(self.o[li - 1].reshape(1, 1, -1).contiguous())
+                x = x + lay.mlp(lay.post_attention_layernorm(x))
+                if li < self.L:
+                    pre(li, x)
+                else:
+                    self.logits = model.lm_head(m.norm(x))[0, -1]
+            return run
+
+        fns = [first] + [piece(li) for li in range(1, self.L + 1)]
+        saved = g.decoding_summary
+        g.decoding_summary = False  # the raw-row branch of the gist LoRA (gist_lora.py)
+        try:
+            with torch.no_grad():
+                s = torch.cuda.Stream(dev)
+                s.wait_stream(torch.cuda.current_stream(dev))
+                with torch.cuda.stream(s):  # warm-up (cuBLAS handles, allocator) off the graph
+                    for fn in fns:
+                        fn()
+                torch.cuda.current_stream(dev).wait_stream(s)
+                self.pool = torch.cuda.graph_pool_handle()
+                self.graphs = []
+                for fn in fns:
+                    gr = torch.cuda.CUDAGraph()
+                    with torch.cuda.graph(gr, pool=self.pool):
+                        fn()
+                    self.graphs.append(gr)
+        finally:
+            g.decoding_summary = saved
