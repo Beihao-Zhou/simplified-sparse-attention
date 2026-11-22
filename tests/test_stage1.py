@@ -278,3 +278,66 @@ def test_select_mask_full_expansion_is_the_raw_teacher(cfg, k, zero):
         assert last["sel|raw"] < 1e-10, last
     else:
         assert last["sel|raw"] > 1e-6, last
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="flex backward needs CUDA")
+@pytest.mark.parametrize("coarse", [False, True])
+@pytest.mark.parametrize("k", [1, 3])
+@pytest.mark.parametrize("agent", [False, True])
+def test_select_hybrid_equals_the_dense_mask(cfg, coarse, k, agent):
+    """#29: flex over S + gather over X, merged by log-sum-exp (gist_select_train.py), gives
+    the dense 'sel' mask's student: same loss, same gradients of every trained tensor."""
+    import gist_beam
+    from gist_lora import apply_summary_bias, summary_spans
+    from src.data.gist_stream import gist_segments
+
+    cfg._attn_implementation = gist_flex_attention.GIST_FLEX
+    Global_data.train_attn = "flex"
+    saved_w = (Global_data.raw_window, Global_data.window_turns)
+    kw = {}
+    if agent:  # a pinned prefix, turns and a raw window: S's always / window rules
+        Global_data.raw_window, Global_data.window_turns = 24, 2
+        rng = random.Random(1)
+        raw, pin, turn = [], [], []
+        for t, n in enumerate([12] + [rng.randint(20, 60) for _ in range(6)]):
+            raw += [rng.randrange(1, 900) for _ in range(n)]
+            pin += [t == 0] * n
+            turn += [t] * n
+        g, p, tr = gist_segments(raw, pin, turn, G, 4, 4, sink=3)
+        ids = torch.tensor([g])
+        kw = {"gist_pinned": torch.tensor([p]), "gist_turn": torch.tensor([tr])}
+    else:
+        ids = _ids(n_raw=300)
+    grads, losses = {}, {}
+    try:
+        for impl in ("dense", "hybrid"):
+            Global_data.stage1 = {
+                "pairs": [("sel", "raw")], "down": "sel", "lambda_ntp": 0.0,
+                "select": {"cfg": gist_beam.BeamConfig(k=(k,), coarse=coarse), "rows_from": 0,
+                           "impl": impl}}
+            torch.manual_seed(0)
+            model = GistQwen2ForCausalLM(cfg).float().train()
+            apply_lora(model, "gist", r=4)
+            apply_summary_bias(model, spans=summary_spans(2))
+            _randomize_lora(model)
+            for n, p in model.named_parameters():
+                if "summary_bias" in n:
+                    p.data.normal_(0, 0.5)
+            model.cuda()
+            x = ids.cuda()
+            model(input_ids=x, attention_mask=torch.ones_like(x), use_cache=False,
+                  **{n: v.cuda() for n, v in kw.items()})
+            loss = torch.stack(Global_data.stage1["losses"]["sel|raw"]).sum()
+            loss.backward()
+            losses[impl] = float(loss)
+            grads[impl] = {n: p.grad.clone() for n, p in model.named_parameters()
+                           if p.grad is not None}
+    finally:
+        Global_data.raw_window, Global_data.window_turns = saved_w
+    assert losses["dense"] > 1e-6
+    assert abs(losses["dense"] - losses["hybrid"]) <= 1e-5 * losses["dense"], losses
+    assert grads["dense"].keys() == grads["hybrid"].keys()
+    rel = {n: float((grads["hybrid"][n] - grads["dense"][n]).abs().max()
+                    / grads["dense"][n].abs().max().clamp_min(1e-30)) for n in grads["dense"]}
+    bad = {n: r for n, r in rel.items() if r > 1e-4}  # fp32 rounding: <= 5e-6 seen
+    assert not bad, (max(rel.values()), bad)

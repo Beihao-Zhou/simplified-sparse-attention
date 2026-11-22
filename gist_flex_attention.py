@@ -175,7 +175,7 @@ def gist_flex_attention_forward(
         raise NotImplementedError(f"{GIST_FLEX} attention does not support sliding windows")
 
     B, H_kv, T, d = key.shape
-    key_orig = key
+    key_orig, value_orig = key, value
     idx = gist_kv_perm[:, None, :, None].expand(B, H_kv, T, d)
     key = key.gather(2, idx)
     value = value.gather(2, idx)
@@ -258,9 +258,15 @@ def gist_flex_attention_forward(
         return attend(gist_block_mask), None
     teacher_masks = kwargs["gist_teacher_masks"]
     names = {n for pair in st["pairs"] for n in pair} | {st["down"]}
-    if "sel" in names:
+    if "sel" in names and st["select"].get("impl") == "dense":  # [T, T] mask: <= ~32K, tests
         teacher_masks = {**teacher_masks, "sel": _select_block_mask(
             query, key_orig, beta, kwargs, st["select"], gist_kv_perm, scaling)}
+    elif "sel" in names:  # flex over S + gather over X, merged (gist_select_train.py, #29)
+        from gist_select_train import select_attention
+        teacher_masks = {**teacher_masks, "sel": lambda: select_attention(
+            _flex(query.device), q_in, k_att, v_att, gqa, score_mod, query, key_orig, value_orig,
+            None if beta is None else beta.float(), kwargs, st["select"], gist_kv_perm, scaling,
+            _kernel_options())}
     out = _stage1_attention(module, attend, gist_block_mask, teacher_masks,
                             kwargs["gist_loss_rows"], st)
     if st.get("route_rows", 0) > 0 and module.layer_idx > 0:
@@ -361,12 +367,15 @@ def _stage1_attention(module, attend, hier_mask, teacher_masks, rows, st):
     masks = {"hier": hier_mask, **teacher_masks}
     students = {s for s, _ in st["pairs"]} | {st["down"]}
     outs = {}
+    def run(m):  # a BlockMask, or a function computing the output itself ("sel", #29)
+        return m() if callable(m) and not hasattr(m, "kv_num_blocks") else attend(m)
+
     for name in sorted({n for pair in st["pairs"] for n in pair} | {st["down"]}):
         if name in students:
-            outs[name] = attend(masks[name])
+            outs[name] = run(masks[name])
         else:
             with torch.no_grad():
-                outs[name] = attend(masks[name])
+                outs[name] = run(masks[name])
     B, T = rows.shape
     proj = {n: module.o_proj(o.reshape(B, T, -1)) for n, o in outs.items()}
     for s_name, t_name in st["pairs"]:
