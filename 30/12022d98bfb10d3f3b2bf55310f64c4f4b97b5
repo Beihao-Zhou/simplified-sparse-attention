@@ -1,0 +1,21 @@
+gist_session.py
+  s_466735a13fa48a::t_bf0d3b2f7671db 178-179,184-185
+  s_466735a13fa48a::t_9fd83d39e11004 135-165
+  s_466735a13fa48a::t_b258d3af02607d 263-335
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "3012022d98bfb10d3f3b2bf55310f64c4f4b97b5",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
