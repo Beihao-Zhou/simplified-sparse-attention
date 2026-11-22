@@ -146,7 +146,7 @@ def apply_lora(
     rows = torch.zeros(emb.shape[0], 1, dtype=emb.dtype, device=emb.device)
     rows[Global_data.gist_token_id] = 1
     emb.requires_grad_(True)
-    emb.register_hook(lambda g: g * rows)
+    emb.register_hook(lambda g: g * rows.to(g.device, g.dtype))  # the model may move later
     groups["embed"].append(emb)
     return groups
 

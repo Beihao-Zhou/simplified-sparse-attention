@@ -133,6 +133,9 @@ def beam_decode_fast(module, query, key, value, src, scaling, cfg):
     out = ext().beam_decode_attn(query.contiguous(), key.contiguous(), value.contiguous(), idx,
                                  beta, scaling, 8)
     module._beam_levels = levels
+    rec = Global_data.opsd_record
+    if rec is not None:  # OPSD rollout: the keys this layer attended to (gist_opsd_long.py)
+        rec[module.layer_idx] = idx
     return out, None
 
 

@@ -1163,6 +1163,14 @@ def _decoding_summary(tmp_ids) -> bool:
 
 
 def _summary_query_decode(module, query, key, value, attention_mask, scaling):
+    if Global_data.opsd_record is not None:  # OPSD rollout (gist_opsd_long.py)
+        from gist_opsd_long import positions, visible_row
+        Global_data.opsd_record[module.layer_idx] = positions(
+            visible_row(attention_mask).expand(key.shape[1], -1))
+    return _summary_query_decode_impl(module, query, key, value, attention_mask, scaling)
+
+
+def _summary_query_decode_impl(module, query, key, value, attention_mask, scaling):
     """A summary decoded at generation time attends exactly by its gist-mask row, as summary
     rows do in prefill (no unfolding). Its key changes the gist structure, so the decode
     cache is rebuilt on the next step."""

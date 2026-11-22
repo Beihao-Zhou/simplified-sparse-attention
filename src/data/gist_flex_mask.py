@@ -196,7 +196,17 @@ def make_gist_mask_mod(
             out = (out & (lq < m)) | ((lq >= m) & (k == q_idx))
         return out
 
-    return mask_mod
+    return _in_range(mask_mod, level.shape[1])
+
+
+def _in_range(mod, T: int):
+    """mod restricted to [0, T) x [0, T). Flex also evaluates the padding up to a multiple
+    of the block size; without this the feature gathers read past the end (a length that
+    is not a multiple of 128, as appends and replays have)."""
+    def wrapped(b, h, q_idx, kv_idx):
+        ok = (q_idx < T) & (kv_idx < T)
+        return mod(b, h, q_idx.clamp(max=T - 1), kv_idx.clamp(max=T - 1)) & ok
+    return wrapped
 
 
 def _window_and_pinned(f: GistMaskFeatures, kv_perm: Optional[torch.Tensor]):
@@ -263,7 +273,7 @@ def make_teacher_mask_mod(f: GistMaskFeatures, kind: str, kv_perm: Optional[torc
             vis = vis | ~has_gist[b]
         return (k <= q_idx) & (vis | (k == q_idx)) & ~k_pad[b, kv_idx]
 
-    return mask_mod
+    return _in_range(mask_mod, level.shape[1])
 
 
 def gist_pool_permutation(f: GistMaskFeatures) -> torch.Tensor:

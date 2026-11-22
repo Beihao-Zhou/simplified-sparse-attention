@@ -105,6 +105,7 @@ class GistSession:
             Global_data.train_attn = saved
         self.past = out.past_key_values
         self.model.tmp_ids = ids  # what decode steps extend
+        self.last_hidden = out.last_hidden_state[0, -1]
         return out.last_hidden_state[0]
 
     # -- decode --------------------------------------------------------------------------
@@ -121,13 +122,16 @@ class GistSession:
         return make_gist_mask_mod(f)(z, z, z + T - 1, torch.arange(T, device=ids.device)).view(1, 1, 1, T)
 
     @torch.no_grad()
-    def step(self, token: int, turn: Optional[int] = None) -> torch.Tensor:
+    def step(self, token: int, turn: Optional[int] = None, record: bool = False) -> torch.Tensor:
         """Decode one raw token and the summaries the streaming rule puts after it; returns
-        the logits of the raw token's row [V]."""
+        the logits of the last fed row [V], the prediction of the next raw token (a summary
+        row predicts the raw token after it, as the training data has it). record: self.last_records gets, per fed
+        token, the key positions each layer attended to (gist_opsd_long.py)."""
         turn = self.turn[-1] if turn is None and self.turn else (turn or 0)
         start = len(self.ids)
         self._push([token], [False], [turn], extend_tree=False)  # extended as each token is fed
         logits = None
+        self.last_records = []
         saved = Global_data.decode_gists
         Global_data.decode_gists = True  # summaries share the position of the raw token before
         try:
@@ -139,15 +143,18 @@ class GistSession:
                 if self.tree is not None:
                     self.tree.extend([self.ids[i]], [self.pinned[i]], [self.turn[i]])
                 Global_data.beam_incremental = self.tree
+                Global_data.opsd_record = {} if record else None
                 out = self.model(
                     input_ids=ids[:, -1:], attention_mask=torch.ones_like(ids),
                     attention_mask_gist=self._row(ids, pin, tr), past_key_values=self.past,
                     use_cache=True)
                 self.past = out.past_key_values
-                if i == start:
-                    logits = out.logits[0, -1]
+                if record:
+                    self.last_records.append(Global_data.opsd_record)
+                logits = out.logits[0, -1]
         finally:
             Global_data.decode_gists = saved
             Global_data.decoding_summary = None
             Global_data.beam_incremental = None
+            Global_data.opsd_record = None
         return logits

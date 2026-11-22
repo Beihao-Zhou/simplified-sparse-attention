@@ -104,7 +104,8 @@ def prepare_gist_flex(
         f, input_ids.shape[1], block_size=block_size, kv_perm=perm,
         compile_mask=input_ids.is_cuda, q_offset=q_offset,
     )
-    out = {"gist_block_mask": block_mask, "gist_kv_perm": perm}
+    out = {"gist_block_mask": block_mask, "gist_kv_perm": perm, "gist_features": f,
+           "gist_input_ids": input_ids}
     if Global_data.stage1 is not None and q_offset:
         raise NotImplementedError("stage 1 trains on whole sequences, not appends")
     if Global_data.stage1 is not None:
@@ -152,6 +153,10 @@ def gist_flex_attention_forward(
         out = torch.nn.functional.scaled_dot_product_attention(
             query, repeat_kv(key, hpg), repeat_kv(value, hpg), attn_mask=attention_mask,
             scale=scaling)
+        if Global_data.opsd_record is not None:
+            from gist_opsd_long import positions, visible_row
+            Global_data.opsd_record[module.layer_idx] = positions(
+                visible_row(attention_mask).expand(key.shape[1], -1))
         return out.transpose(1, 2).contiguous(), None
     if gist_block_mask is None or gist_kv_perm is None:
         raise ValueError(
@@ -188,7 +193,7 @@ def gist_flex_attention_forward(
             hpg = query.shape[1] // H_kv
 
             def score_mod(score, b, h, q_idx, kv_idx):
-                return score + beta_p[b, h // hpg, kv_idx]
+                return score + beta_p[b, h // hpg, kv_idx.clamp(max=T - 1)]  # padded keys: in range
         else:
             q_in, k_in = fold_beta(query, key, beta_p, scaling)
 
@@ -203,7 +208,7 @@ def gist_flex_attention_forward(
         k_att, v_att, gqa = repeat_kv(k_in, hpg_q), repeat_kv(value, hpg_q), False
         if score_mod is not None:
             def score_mod(score, b, h, q_idx, kv_idx):  # noqa: F811  (beta per KV head)
-                return score + beta_p[b, h // hpg_q, kv_idx]
+                return score + beta_p[b, h // hpg_q, kv_idx.clamp(max=T - 1)]
 
     def attend(block_mask):
         out = _flex(query.device)(
@@ -216,6 +221,16 @@ def gist_flex_attention_forward(
         )
         return out.transpose(1, 2).contiguous()
 
+    of = Global_data.opsd_flex
+    if of is not None:  # OPSD replay (gist_opsd_long.py): generated rows use recorded keys
+        from gist_opsd_long import replay_block_mask, replay_routing
+        if of["probe_layer"] == module.layer_idx:
+            key_orig.retain_grad()
+            of["probe"] = key_orig
+        out = attend(replay_block_mask(module, query, H_kv, kwargs, of, gist_kv_perm))
+        if of["route"]:
+            replay_routing(module, query, key_orig, beta, kwargs, of, scaling)
+        return out, None
     st = Global_data.stage1
     if st is None:
         return attend(gist_block_mask), None

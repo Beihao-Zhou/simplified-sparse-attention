@@ -35,6 +35,8 @@ class Global_data:
     beam_segments = None  # DECODE_SELECT=beam: (pinned [T], turn [T]) of the sequence
     decoding_summary = None  # decode_gists: whether the token being fed is a summary (None: look)
     beam_incremental = None  # gist_session.py: gist_beam_cuda.IncrementalTree of the sequence
+    opsd_record = None  # gist_opsd_long.py: a dict a decode step fills with {layer: key positions}
+    opsd_flex = None  # gist_opsd_long.py: replay of recorded generated rows through flex
     beam_trace = None  # DECODE_SELECT=beam: a list collects (layer, ids per KV group) per call
     # Non-selective training computes the LM loss in chunks of this many tokens instead of
     # materializing [B, T, vocab] fp32 logits; 0 = off.

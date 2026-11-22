@@ -298,6 +298,11 @@ def beam_decode(module, query, key, value, ids, scaling):
         vis = visible(tree, s, cfg.coarse)
         outs.append(attend(qg, key[0, g], value[0, g], vis, scaling, bg))
         rec.append(s.ids(0))
+        vis_groups = vis if g == 0 else torch.cat([vis_groups, vis])
+    if Global_data.opsd_record is not None:
+        from gist_opsd_long import positions
+
+        Global_data.opsd_record[module.layer_idx] = positions(vis_groups)
     module._beam_ids = rec
     trace = getattr(Global_data, "beam_trace", None)
     if isinstance(trace, list):
