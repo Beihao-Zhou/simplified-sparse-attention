@@ -154,7 +154,7 @@ def test_fast_path_matches_the_reference(merge, coarse, levels):
         torch.testing.assert_close(out[0, 0, g * hpg:(g + 1) * hpg].float(), ref, rtol=2e-2, atol=2e-2)
 
 
-def _tiny_session_logits(monkeypatch, impls):
+def _tiny_session_logits(monkeypatch, impls, steps=(5, 6, 7, 8)):
     import random
 
     from transformers import Qwen2Config
@@ -198,7 +198,7 @@ def _tiny_session_logits(monkeypatch, impls):
             s = GistSession(m)
             for raw, pin, turn in segs:
                 s.append(raw, pin, turn)
-            logits[impl] = torch.stack([s.step(t) for t in (5, 6, 7, 8)]).float()
+            logits[impl] = torch.stack([s.step(t) for t in steps]).float()
         return logits
     finally:
         for k, v in saved.items():
@@ -209,6 +209,15 @@ def test_model_decode_fast_equals_reference(monkeypatch):
     logits = _tiny_session_logits(monkeypatch, ("ref", "sparse"))
     assert torch.isfinite(logits["sparse"]).all()
     torch.testing.assert_close(logits["sparse"], logits["ref"], rtol=5e-2, atol=5e-2)
+
+
+def test_session_decode_without_model_forward_is_bit_identical(monkeypatch):
+    """GistSession._decode_fast against model.forward, over enough steps to feed summaries."""
+    runs = {}
+    for fast in ("0", "1"):
+        monkeypatch.setenv("GIST_FAST_DECODE", fast)
+        runs[fast] = _tiny_session_logits(monkeypatch, ("sparse",), steps=range(5, 30))["sparse"]
+    assert torch.equal(runs["0"], runs["1"])
 
 
 def test_session_fast_path_never_rebuilds_the_tree(monkeypatch):

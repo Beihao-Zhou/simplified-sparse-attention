@@ -121,6 +121,68 @@ class GistSession:
         z = torch.zeros((), dtype=torch.long, device=ids.device)
         return make_gist_mask_mod(f)(z, z, z + T - 1, torch.arange(T, device=ids.device)).view(1, 1, 1, T)
 
+    def _fast_ok(self) -> bool:
+        """The DECODE_SELECT=beam CUDA path can skip model.forward (see _decode_fast)."""
+        import os
+
+        m = self.model
+        return (self.tree is not None and os.environ.get("DECODE_SELECT") == "beam"
+                and os.environ.get("ATTN_IMPL", "sparse") != "ref"
+                and os.environ.get("GIST_FAST_DECODE", "1") == "1"
+                and type(m).__name__ == "GistQwen2ForCausalLM" and getattr(m, "selective", False)
+                and m.model.embed_tokens.weight.dtype == torch.bfloat16)
+
+    def _decode_fast(self, i: int, ids, vis) -> torch.Tensor:
+        """Fed token i through the layers as model.forward would on the beam path, without
+        its per-step O(T) work (the [T] causal and additive masks, the tmp_ids concatenation,
+        isin over the sequence): layer 0 and summary rows attend by their gist-mask row vis
+        (kernel B), raw rows of the other layers by beam selection. Bit-identical to
+        model.forward (tests/test_beam_kernels.py). Returns the logits [V]."""
+        from transformers.models.qwen2.modeling_qwen2 import apply_rotary_pos_emb
+
+        from gist_beam import beam_decode
+        from gist_beam_cuda import row_decode
+        from gist_lora import extend_beta_cache
+
+        g = Global_data
+        m = self.model.model
+        tok = self.ids[i]
+        summ = tok in self.gist_ids
+        x = m.embed_tokens(ids[:, -1:])
+        if g.lora_active:
+            g.lora_row_mask = torch.tensor([[summ]], device=self.device)
+            g.lora_row_level = torch.tensor([[self.gist_ids.index(tok) if summ else -1]],
+                                            device=self.device)
+        rope_pos = g.last_pos + (0 if summ else 1)
+        g.last_pos = rope_pos
+        cos, sin = m.rotary_emb(x, rope_pos)
+        rec = g.opsd_record
+        for layer in m.layers[: m.config.num_hidden_layers]:
+            a = layer.self_attn
+            res = x
+            h = layer.input_layernorm(x)
+            shape = (1, 1, -1, a.head_dim)
+            q = a.q_proj(h).view(shape).transpose(1, 2)
+            k = a.k_proj(h).view(shape).transpose(1, 2)
+            v = a.v_proj(h).view(shape).transpose(1, 2)
+            q, k = apply_rotary_pos_emb(q, k, cos, sin)
+            k, v = self.past.update(k, v, layer.layer_idx, {"sin": sin, "cos": cos})
+            if layer.layer_idx == 0 or summ:
+                beta = None
+                if layer.layer_idx > 0:
+                    a._gist_decode_cache = None
+                    if getattr(a, "summary_bias", None) is not None:
+                        a._bias_x = h
+                        beta = extend_beta_cache(a, k.shape[2], 1)[0]
+                o, idx = row_decode(q, k, v, vis, beta, a.scaling)
+                if rec is not None:
+                    rec[layer.layer_idx] = idx
+            else:
+                o, _ = beam_decode(a, q, k, v, ids, a.scaling)
+            x = res + a.o_proj(o.reshape(1, 1, -1).contiguous())
+            x = x + layer.mlp(layer.post_attention_layernorm(x))
+        return self.model.lm_head(m.norm(x))[0, -1]
+
     @torch.no_grad()
     def step(self, token: int, turn: Optional[int] = None, record: bool = False) -> torch.Tensor:
         """Decode one raw token and the summaries the streaming rule puts after it; returns
@@ -133,6 +195,7 @@ class GistSession:
         logits = None
         self.last_records = []
         saved = Global_data.decode_gists
+        fast = self._fast_ok()
         Global_data.decode_gists = True  # summaries share the position of the raw token before
         try:
             for i in range(start, len(self.ids)):
@@ -144,14 +207,18 @@ class GistSession:
                     self.tree.extend([self.ids[i]], [self.pinned[i]], [self.turn[i]])
                 Global_data.beam_incremental = self.tree
                 Global_data.opsd_record = {} if record else None
-                out = self.model(
-                    input_ids=ids[:, -1:], attention_mask=torch.ones_like(ids),
-                    attention_mask_gist=self._row(ids, pin, tr), past_key_values=self.past,
-                    use_cache=True)
-                self.past = out.past_key_values
+                if fast:
+                    logits = self._decode_fast(i, ids, self._row(ids, pin, tr)[0, 0, 0])
+                    self.model.tmp_ids = ids  # as model.forward leaves it
+                else:
+                    out = self.model(
+                        input_ids=ids[:, -1:], attention_mask=torch.ones_like(ids),
+                        attention_mask_gist=self._row(ids, pin, tr), past_key_values=self.past,
+                        use_cache=True)
+                    self.past = out.past_key_values
+                    logits = out.logits[0, -1]
                 if record:
                     self.last_records.append(Global_data.opsd_record)
-                logits = out.logits[0, -1]
         finally:
             Global_data.decode_gists = saved
             Global_data.decoding_summary = None
