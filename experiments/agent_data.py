@@ -13,7 +13,9 @@ longest common prefix of render(m[:i]) and render(m[:i+1]); no template markers 
 parsed. Output is two `datasets` directories (train / heldout, split by issue so one
 issue never lands in both) with input_ids (raw, no summaries), pinned, turn, length.
 Each row group is written as soon as it is done (<out>/parts/rgNN/...) and skipped on a
-rerun, so a preempted run continues; the splits are assembled at the end.
+rerun, so a preempted run continues. The train / held-out split is not written out (a
+second copy of ~40 GB filled the disk once): `load_split` concatenates the parts and
+selects by a hash of the issue id, an index view without copying.
 
     python experiments/agent_data.py --out ~/agent_data --row_groups 0 1
 """
@@ -110,13 +112,31 @@ def heldout(instance_id, frac):
     return int(hashlib.sha1(instance_id.encode()).hexdigest(), 16) % 10_000 < frac * 10_000
 
 
+HELDOUT_FRAC = 0.05
+
+
+def load_split(out_dir, split, frac=HELDOUT_FRAC):
+    """The converted trajectories of one split ("train" | "heldout"): every row group's
+    parts concatenated (memory-mapped), selected by a hash of the issue id. A larger frac
+    holds out a superset of issues."""
+    import glob
+
+    import datasets
+
+    parts = sorted(glob.glob(os.path.join(os.path.expanduser(out_dir), "parts", "rg*", "*")))
+    parts = [p for p in parts if os.path.isdir(p)]
+    ds = datasets.concatenate_datasets([datasets.load_from_disk(p) for p in parts])
+    keep = [heldout(i, frac) == (split == "heldout") for i in ds["instance_id"]]
+    return ds.select([k for k, h in enumerate(keep) if h])
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
     ap.add_argument("--model", default="Qwen/Qwen2.5-0.5B-Instruct", help="tokenizer and chat template")
     ap.add_argument("--row_groups", type=int, nargs="+", default=[0])
     ap.add_argument("--max_rows", type=int, default=0, help="per row group, 0 = all")
-    ap.add_argument("--heldout_frac", type=float, default=0.05,
+    ap.add_argument("--heldout_frac", type=float, default=HELDOUT_FRAC,
                     help="issues held out, by a hash of the issue id; applied when the splits "
                     "are assembled, so it can change without converting again (a larger "
                     "fraction holds out a superset)")
@@ -172,15 +192,8 @@ def main():
         print(f"row group {rg}: {n} rows", flush=True)
     stats = [json.load(open(os.path.join(out_dir, "parts", f"rg{rg:02d}", "stats.json")))
              for rg in args.row_groups]
-    parts = [os.path.join(out_dir, "parts", f"rg{rg:02d}", split)
-             for rg in args.row_groups for split in ("train", "heldout")]
-    allrows = datasets.concatenate_datasets([datasets.load_from_disk(x) for x in parts if os.path.exists(x)])
-    is_held = [heldout(i, args.heldout_frac) for i in allrows["instance_id"]]
-    for split, keep in (("train", False), ("heldout", True)):
-        idx = [k for k, h in enumerate(is_held) if h == keep]
-        allrows.select(idx).save_to_disk(os.path.join(out_dir, split))
-    held_n = sum(is_held)
-    train_n = len(is_held) - held_n
+    held_n = len(load_split(out_dir, "heldout", args.heldout_frac))
+    train_n = len(load_split(out_dir, "train", args.heldout_frac))
     L = np.array([x for s in stats for x in s["length"]])
     P = np.array([x for s in stats for x in s["n_pinned"]])
     tc = np.array([x for s in stats for x in s["tool_chars"]])

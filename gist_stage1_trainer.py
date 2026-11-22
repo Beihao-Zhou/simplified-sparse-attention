@@ -174,6 +174,17 @@ def stage1_config(args, pairs=None, down=None):
     }
 
 
+def load_data(path, split):
+    """A saved dataset, or converted agent trajectories (a directory with parts/, from
+    experiments/agent_data.py), whose split is selected by issue at load time."""
+    path = os.path.expanduser(path)
+    if os.path.isdir(os.path.join(path, "parts")):
+        from experiments.agent_data import load_split
+
+        return load_split(path, split)
+    return datasets.load_from_disk(path)
+
+
 def select_config(args, rows_from=0):
     """The beam selection of a 'sel' mask (gist_beam.py), or None."""
     import gist_beam
@@ -341,8 +352,8 @@ def main(argv=None):
         * (1 + math.cos(math.pi * min(s, args.steps) / args.steps)),
     )
     Global_data.stage1 = stage1_config(args)
-    train = datasets.load_from_disk(os.path.expanduser(args.data))
-    held = datasets.load_from_disk(os.path.expanduser(args.heldout)).select(range(args.eval_rows))
+    train, held = load_data(args.data, "train"), load_data(args.heldout, "heldout")
+    held = held.select(range(args.eval_rows))
     held_long = held
     if args.heldout_long:
         hl = datasets.load_from_disk(os.path.expanduser(args.heldout_long))

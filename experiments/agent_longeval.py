@@ -82,8 +82,10 @@ def main():
     args = ap.parse_args()
     import datasets
 
-    parts = [os.path.join(os.path.expanduser(args.src), "heldout")]
-    rows = list(datasets.load_from_disk(parts[0]))
+    from experiments.agent_data import HELDOUT_FRAC, load_split
+
+    parts = [os.path.join(os.path.expanduser(args.src), "parts")]
+    rows = list(load_split(args.src, "heldout", HELDOUT_FRAC))
     n_traj = len(rows)
     rows = one_per_issue(rows)
     print(f"{n_traj} held-out trajectories, {len(rows)} issues (longest attempt each)", flush=True)
