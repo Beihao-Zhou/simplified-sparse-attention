@@ -55,7 +55,8 @@ def _inputs(seed=0, n=700, H=3, R=9, d=8):
 
 def test_default_is_the_original_loss():
     q, q_pos, k, ids, beta = _inputs()
-    assert torch.equal(routing_kl(q, q_pos, k, ids, GIDS, 0.3, beta), _old(q, q_pos, k, ids, GIDS, 0.3, beta))
+    torch.testing.assert_close(routing_kl(q, q_pos, k, ids, GIDS, 0.3, beta),
+                               _old(q, q_pos, k, ids, GIDS, 0.3, beta), rtol=1e-12, atol=1e-12)
 
 
 def test_exclude_drops_keys_from_the_true_mass():

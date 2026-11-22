@@ -120,9 +120,13 @@ def test_gradients_reach_what_was_attended(setup, monkeypatch, coarse):
     unseen = ~seen & is_sum[None]
     assert unseen.any() and (g[:, :Tc][unseen] == 0).all(), "only attended keys get gradient"
     model.zero_grad()
+    model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     _, st = ol.replay(model, *ctx, stream, recs, VOCAB, route={"scope": "level"})
     st["route"].backward()
+    # the checkpoint rerun must not append a second loss per layer (it leaked its graph)
+    assert len(Global_data.opsd_flex["route_losses"]) == last
     ol.end_replay(st)
+    model.gradient_checkpointing_disable()
     assert float(st["route"]) > 0
     sb = [p for n, p in model.named_parameters() if "summary_bias" in n]
     assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in sb)

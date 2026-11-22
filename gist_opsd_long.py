@@ -129,10 +129,16 @@ def replay_routing(module, query, key, beta, kwargs, of, scaling):
     f = kwargs["gist_features"]
     ex = unit_exclude(ids, Global_data.gist_token_id, Global_data.sink_size,
                       None if f.pinned is None else f.pinned[0])
-    of["route_losses"].append(routing_kl(
+    loss = routing_kl(
         query[0][:, rows], rows, repeat_kv(key, hpg)[0], ids, Global_data.gist_token_id, scaling,
         None if beta is None else beta[0].repeat_interleave(hpg, 0), exclude=ex,
-        scope=of["route"].get("scope", "level"), oracle_k=of["route"].get("oracle_k", 256)))
+        scope=of["route"].get("scope", "level"), oracle_k=of["route"].get("oracle_k", 256))
+    # gradient checkpointing reruns the layer during backward: the rerun must repeat these
+    # ops (saved tensors are matched in order) but must not keep its loss, whose graph
+    # would hold ~0.45 GB per 1K tokens until end_replay
+    if module.layer_idx not in of["route_layers"]:
+        of["route_layers"].add(module.layer_idx)
+        of["route_losses"].append(loss)
 
 
 def replay(model, ctx_ids: List[int], ctx_pinned: List[bool], ctx_turn: List[int],
@@ -152,7 +158,7 @@ def replay(model, ctx_ids: List[int], ctx_pinned: List[bool], ctx_turn: List[int
     pin = torch.tensor([ctx_pinned + [False] * len(fed)], device=dev)
     turn = torch.tensor([ctx_turn + [ctx_turn[-1] if ctx_turn else 0] * len(fed)], device=dev)
     of = {"T_ctx": Tc, "records": records, "route": route, "route_losses": [],
-          "probe_layer": probe_layer, "probe": None}
+          "route_layers": set(), "probe_layer": probe_layer, "probe": None}
     saved = (Global_data.train_attn, Global_data.opsd_flex, Global_data.stage1)
     Global_data.train_attn, Global_data.opsd_flex, Global_data.stage1 = "flex", of, None
     try:

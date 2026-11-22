@@ -64,8 +64,11 @@ def routing_kl(
         with torch.no_grad():
             x = logits[..., member]
             mx = x.amax(-1, keepdim=True) if x.numel() else x.sum(-1, keepdim=True)
-            onehot = F.one_hot(unit[member], max(G, 1)).to(logits.dtype)[..., :G]
-            mass = torch.einsum("hrk,kg->hrg", (x - mx).exp(), onehot).masked_fill(~cand, 0)
+            # sum exp per unit by scatter: a dense [raw keys, units] one-hot is O(T^2 / 4)
+            # (17 GB per level at 128K)
+            mass = torch.zeros(*x.shape[:2], max(G, 1), dtype=x.dtype, device=x.device)
+            mass.scatter_add_(-1, unit[member].expand(*x.shape[:2], -1), (x - mx).exp())
+            mass = mass[..., :G].masked_fill(~cand, 0)
         levels.append((is_g, g_pos, cand, mass))
     losses = []
     H, R = logits.shape[:2]
