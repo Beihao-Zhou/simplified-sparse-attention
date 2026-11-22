@@ -112,7 +112,7 @@ def heldout(instance_id, frac):
     return int(hashlib.sha1(instance_id.encode()).hexdigest(), 16) % 10_000 < frac * 10_000
 
 
-HELDOUT_FRAC = 0.05
+HELDOUT_FRAC = 0.06  # 5% gave 19 samples of 1M with one attempt per issue (#23)
 
 
 def load_split(out_dir, split, frac=HELDOUT_FRAC):
