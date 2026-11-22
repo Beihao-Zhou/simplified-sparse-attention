@@ -71,9 +71,12 @@ def trim_log(path, step):
         return
     keep = []
     for line in open(path):
-        s = json.loads(line).get("step")
+        try:
+            s = json.loads(line).get("step")
+        except json.JSONDecodeError:  # a line cut off by a crash (e.g. a full disk)
+            continue
         if not isinstance(s, int) or s <= step:
-            keep.append(line)
+            keep.append(line if line.endswith("\n") else line + "\n")
     with open(path + ".tmp", "w") as f:
         f.writelines(keep)
     os.replace(path + ".tmp", path)

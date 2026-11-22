@@ -36,10 +36,16 @@ class GistSession:
         self.device = next(model.parameters()).device
         self._buf = torch.zeros(3, 0, dtype=torch.long, device=self.device)  # ids, pinned, turn
         self._n_raw = []  # raw tokens up to and including position i
+        self.tree = None
+        if self.device.type == "cuda":  # kept token by token for the beam fast path (#20)
+            from gist_beam_cuda import IncrementalTree
+
+            self.tree = IncrementalTree(self.gist_ids, g.sink_size, self.device)
 
     # -- bookkeeping ---------------------------------------------------------------------
 
-    def _push(self, raw: Sequence[int], pinned: Sequence[bool], turn: Sequence[int]) -> int:
+    def _push(self, raw: Sequence[int], pinned: Sequence[bool], turn: Sequence[int],
+              extend_tree: bool = True) -> int:
         """Gist raw tokens onto the stream; returns how many tokens (raw + summaries) were added."""
         n0 = len(self.ids)
         gset = set(self.gist_ids)
@@ -58,6 +64,8 @@ class GistSession:
         new = torch.tensor([self.ids[n0:], self.pinned[n0:], self.turn[n0:]], dtype=torch.long,
                            device=self.device)
         self._buf = torch.cat([self._buf, new], 1)  # ponytail: amortized copy, grows the buffer each push
+        if self.tree is not None and extend_tree:
+            self.tree.extend(self.ids[n0:], self.pinned[n0:], self.turn[n0:])
         return len(self.ids) - n0
 
     def _last_pos(self, upto: int) -> torch.Tensor:
@@ -118,7 +126,7 @@ class GistSession:
         the logits of the raw token's row [V]."""
         turn = self.turn[-1] if turn is None and self.turn else (turn or 0)
         start = len(self.ids)
-        self._push([token], [False], [turn])
+        self._push([token], [False], [turn], extend_tree=False)  # extended as each token is fed
         logits = None
         saved = Global_data.decode_gists
         Global_data.decode_gists = True  # summaries share the position of the raw token before
@@ -128,6 +136,9 @@ class GistSession:
                 Global_data.beam_segments = (pin[0], tr[0])
                 Global_data.last_pos = self._last_pos(i)
                 Global_data.decoding_summary = self.ids[i] in self.gist_ids
+                if self.tree is not None:
+                    self.tree.extend([self.ids[i]], [self.pinned[i]], [self.turn[i]])
+                Global_data.beam_incremental = self.tree
                 out = self.model(
                     input_ids=ids[:, -1:], attention_mask=torch.ones_like(ids),
                     attention_mask_gist=self._row(ids, pin, tr), past_key_values=self.past,
@@ -138,4 +149,5 @@ class GistSession:
         finally:
             Global_data.decode_gists = saved
             Global_data.decoding_summary = None
+            Global_data.beam_incremental = None
         return logits

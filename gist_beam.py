@@ -236,7 +236,7 @@ def config_from_env() -> BeamConfig:
     )
 
 
-_TREE = {"key": None, "tree": None}
+_TREE = {"key": None, "ids": None, "tree": None}
 
 
 def _decode_tree(ids: torch.Tensor):
@@ -244,12 +244,13 @@ def _decode_tree(ids: torch.Tensor):
     from gist_utils import Global_data
 
     key = (ids.data_ptr(), ids.numel(), int(ids[-1]))
-    if _TREE["key"] != key:
+    if _TREE["key"] != key or _TREE["ids"] is None:
         seg = getattr(Global_data, "beam_segments", None)  # (pinned [T], turn [T]) or None
         pinned = turn = None
         if seg is not None:
             pinned, turn = (x[: ids.numel()].to(ids.device) for x in seg)
         _TREE["key"] = key
+        _TREE["ids"] = ids  # held so its data pointer cannot be reused by another tensor
         _TREE["tree"] = build_tree(ids, Global_data.gist_token_id, Global_data.sink_size,
                                    pinned, turn)
     return _TREE["tree"]
@@ -267,7 +268,6 @@ def beam_decode(module, query, key, value, ids, scaling):
     if query.shape[0] != 1:
         raise NotImplementedError("DECODE_SELECT=beam is batch-1 (#24)")
     cfg = config_from_env()
-    tree = _decode_tree(ids[0])
     T = key.shape[2]
     beta = None
     if getattr(module, "summary_bias", None) is not None:
@@ -277,10 +277,14 @@ def beam_decode(module, query, key, value, ids, scaling):
         beta = module._beta_cache[0]                           # [H_kv, T]
     if (os.environ.get("ATTN_IMPL", "sparse") != "ref" and query.is_cuda
             and key.dtype == torch.bfloat16):
-        # kernels A and B (gist_beam_cuda.py); this function stays the reference
+        # kernels A and B (gist_beam_cuda.py); this function stays the reference. A session
+        # keeps the tree up to date token by token; otherwise it is rebuilt for the step.
         from gist_beam_cuda import beam_decode_fast
 
-        return beam_decode_fast(module, query, key, value, tree, scaling, cfg)
+        inc = getattr(Global_data, "beam_incremental", None)
+        src = inc if inc is not None and inc.n == T else _decode_tree(ids[0])
+        return beam_decode_fast(module, query, key, value, src, scaling, cfg)
+    tree = _decode_tree(ids[0])
     H, H_kv = query.shape[1], key.shape[1]
     hpg = H // H_kv
     rows = torch.tensor([T - 1], device=query.device)

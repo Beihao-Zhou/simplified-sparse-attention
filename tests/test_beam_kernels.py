@@ -154,7 +154,7 @@ def test_fast_path_matches_the_reference(merge, coarse, levels):
         torch.testing.assert_close(out[0, 0, g * hpg:(g + 1) * hpg].float(), ref, rtol=2e-2, atol=2e-2)
 
 
-def test_model_decode_fast_equals_reference(monkeypatch):
+def _tiny_session_logits(monkeypatch, impls):
     import random
 
     from transformers import Qwen2Config
@@ -193,14 +193,66 @@ def test_model_decode_fast_equals_reference(monkeypatch):
         segs = [([rng.randint(1, 999) for _ in range(9)], True, 0)] + [
             ([rng.randint(1, 999) for _ in range(rng.randint(20, 90))], False, t) for t in range(1, 12)]
         logits = {}
-        for impl in ("ref", "sparse"):
+        for impl in impls:
             monkeypatch.setenv("ATTN_IMPL", impl)
             s = GistSession(m)
             for raw, pin, turn in segs:
                 s.append(raw, pin, turn)
             logits[impl] = torch.stack([s.step(t) for t in (5, 6, 7, 8)]).float()
-        assert torch.isfinite(logits["sparse"]).all()
-        torch.testing.assert_close(logits["sparse"], logits["ref"], rtol=5e-2, atol=5e-2)
+        return logits
     finally:
         for k, v in saved.items():
             setattr(Global_data, k, v)
+
+
+def test_model_decode_fast_equals_reference(monkeypatch):
+    logits = _tiny_session_logits(monkeypatch, ("ref", "sparse"))
+    assert torch.isfinite(logits["sparse"]).all()
+    torch.testing.assert_close(logits["sparse"], logits["ref"], rtol=5e-2, atol=5e-2)
+
+
+def test_session_fast_path_never_rebuilds_the_tree(monkeypatch):
+    import gist_beam
+
+    calls = []
+    orig = gist_beam._decode_tree
+    monkeypatch.setattr(gist_beam, "_decode_tree", lambda ids: calls.append(1) or orig(ids))
+    _tiny_session_logits(monkeypatch, ("sparse",))
+    assert not calls, f"{len(calls)} rebuilds"
+
+
+@pytest.mark.parametrize("levels", [2, 4])
+@pytest.mark.parametrize("window", [(0, 0), (40, 0), (0, 2), (64, 3)])
+def test_incremental_tree_matches_rebuilt_meta(levels, window):
+    import random
+
+    import gist_beam as gb
+    import gist_beam_cuda as fast
+    from src.data.gist_stream import gist_segments
+
+    rng = random.Random(levels * 10 + window[1])
+    gids = [90001 + i for i in range(levels)]
+    ids, pinned, turn = [], [], []
+    for _ in range(7):
+        ids.append(rng.randint(1, 999)), pinned.append(True), turn.append(0)
+    for t in range(1, 30):
+        for _ in range(rng.randint(3, 50)):
+            ids.append(rng.randint(1, 999)), pinned.append(False), turn.append(t)
+    g, p, t = gist_segments(ids, pinned, turn, gids, 4, 4, sink=3)
+    inc = fast.IncrementalTree(gids, 3, "cuda")
+    checked = 0
+    for n in range(len(g)):
+        inc.extend([g[n]], [p[n]], [t[n]])
+        if g[n] in gids or n % 7:  # decode queries are raw tokens; check a sample of prefixes
+            continue
+        tree = gb.build_tree(torch.tensor(g[: n + 1], device="cuda"), gids, 3,
+                             torch.tensor(p[: n + 1], device="cuda"), torch.tensor(t[: n + 1], device="cuda"))
+        ref = fast.StepMeta(tree, 1, *window)
+        got = inc.meta(1, *window)
+        assert got.closed == ref.closed and got.lo == ref.lo, (n, got.lo, ref.lo)
+        assert all(torch.equal(a, b) for a, b in zip(got.gpos, ref.gpos))
+        assert torch.equal(got.leaf_pos, ref.leaf_pos)
+        assert torch.equal(torch.sort(got.always).values, torch.sort(ref.always).values)
+        checked += 1
+    assert checked > 50
+

@@ -45,3 +45,10 @@ def test_sigterm_sets_the_flag():
     os.kill(os.getpid(), signal.SIGTERM)
     assert p.requested
     signal.signal(signal.SIGTERM, signal.SIG_DFL)
+
+
+def test_trim_log_drops_a_line_cut_off_by_a_crash(tmp_path):
+    p = tmp_path / "log.jsonl"
+    p.write_text('{"step": 1}\n{"step": 2}\n{"step": 3, "lr"')
+    gist_resume.trim_log(str(p), 2)
+    assert p.read_text() == '{"step": 1}\n{"step": 2}\n'

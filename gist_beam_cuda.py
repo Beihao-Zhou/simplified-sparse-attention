@@ -104,20 +104,24 @@ def key_list(meta: StepMeta, levels, coarse: bool):
     return torch.cat(parts, 1).int().contiguous()
 
 
-_META = {"key": None, "meta": None}
+_META = {"src": None, "n": None, "meta": None}
 
 
 @torch.no_grad()
-def beam_decode_fast(module, query, key, value, tree, scaling, cfg):
+def beam_decode_fast(module, query, key, value, src, scaling, cfg):
     """One decode step of one layer on kernels A and B; same contract as
-    gist_beam.beam_decode."""
+    gist_beam.beam_decode. src: an IncrementalTree at this step, or the step's tree."""
     from gist_utils import Global_data
 
-    mkey = (id(tree), tree.level.numel())
-    if _META["key"] != mkey:
-        _META["key"] = mkey
-        _META["meta"] = StepMeta(tree, Global_data.num_previous_chunks, Global_data.raw_window,
-                                 Global_data.window_turns)
+    g = Global_data
+    inc = isinstance(src, IncrementalTree)
+    n = src.n if inc else src.level.numel()
+    # once per step, shared by the layers. Holding src (not its id) matters: an id or a data
+    # pointer of a freed object can come back for a new one and hand out stale buffers.
+    if _META["src"] is not src or _META["n"] != n:
+        _META["src"], _META["n"] = src, n
+        _META["meta"] = (src.meta(g.num_previous_chunks, g.raw_window, g.window_turns) if inc else
+                         StepMeta(src, g.num_previous_chunks, g.raw_window, g.window_turns))
     meta = _META["meta"]
     H, num_kv, T = query.shape[1], key.shape[1], key.shape[2]
     hpg = H // num_kv
@@ -130,3 +134,98 @@ def beam_decode_fast(module, query, key, value, tree, scaling, cfg):
                                  beta, scaling, 8)
     module._beam_levels = levels
     return out, None
+
+
+class _Buf:
+    """A GPU int32 buffer that grows by doubling; view() is the filled part."""
+
+    def __init__(self, device, cap=1024):
+        self.t = torch.empty(cap, dtype=torch.int32, device=device)
+        self.n = 0
+
+    def push(self, values):
+        k = len(values)
+        if self.n + k > self.t.numel():
+            new = torch.empty(max(2 * self.t.numel(), self.n + k), dtype=torch.int32, device=self.t.device)
+            new[: self.n] = self.t[: self.n]
+            self.t = new
+        self.t[self.n:self.n + k] = torch.tensor(values, dtype=torch.int32).to(self.t.device)
+        self.n += k
+
+    def view(self):
+        return self.t[: self.n]
+
+
+class IncrementalTree:
+    """What StepMeta derives from a whole-sequence tree, kept up to date token by token
+    (O(1) amortized per token), so a decode step does not rebuild the tree (O(T)). Feed
+    every token the model sees, summaries included, with its pinned flag and turn."""
+
+    def __init__(self, gist_ids, sink, device):
+        self.level_of = {g: l for l, g in enumerate(gist_ids)}
+        self.L, self.sink, self.device = len(gist_ids), sink, device
+        self.n = 0
+        self.n_unpinned_raw = 0
+        self.gpos = [_Buf(device) for _ in range(self.L)]
+        self.comp = _Buf(device)            # compressible raw positions, in order
+        self.comp_cpu = []
+        self.always = _Buf(device)          # pinned and sink positions
+        self.turn_first = []                # (turn, first position) for nondecreasing turns
+        self.last_turn = None
+        self._pending = {"comp": [], "always": [], **{l: [] for l in range(self.L)}}
+
+    def extend(self, tokens, pinned, turns):
+        for t, p, tr in zip(tokens, pinned, turns):
+            pos = self.n
+            self.n += 1
+            if tr != self.last_turn:
+                self.turn_first.append((tr, pos))
+                self.last_turn = tr
+            lvl = self.level_of.get(int(t))
+            if lvl is not None:
+                self._pending[lvl].append(pos)
+            elif p:
+                self._pending["always"].append(pos)
+            else:
+                self.n_unpinned_raw += 1
+                if self.n_unpinned_raw <= self.sink:
+                    self._pending["always"].append(pos)
+                else:
+                    self._pending["comp"].append(pos)
+                    self.comp_cpu.append(pos)
+        self._flush()
+
+    def _flush(self):
+        for key, vals in self._pending.items():
+            if vals:
+                buf = self.comp if key == "comp" else self.always if key == "always" else self.gpos[key]
+                buf.push(vals)
+                vals.clear()
+
+    def meta(self, prev_chunks: int, raw_window: int, window_turns: int) -> "StepMeta":
+        """StepMeta for a decode query at the last position."""
+        import bisect
+
+        m = StepMeta.__new__(StepMeta)
+        p = self.n - 1
+        m.L = self.L
+        m.gpos = [b.view() for b in self.gpos]
+        m.closed = [b.n for b in self.gpos]
+        n0 = m.closed[0]
+        lo = n0 - prev_chunks
+        if raw_window > 0 or window_turns > 0:
+            kmin = 0
+            if raw_window > 0:
+                kmin = max(kmin, p - raw_window + 1)
+            if window_turns > 0:
+                t_q = self.last_turn
+                j = bisect.bisect_left([t for t, _ in self.turn_first], t_q - window_turns + 1)
+                kmin = max(kmin, self.turn_first[j][1] if j < len(self.turn_first) else self.n)
+            i = bisect.bisect_left(self.comp_cpu, kmin)
+            if i < len(self.comp_cpu) and self.comp_cpu[i] <= p:
+                lo = min(lo, i // 4)  # leaf of the i-th compressible token
+        m.lo = max(lo, 0)
+        comp = self.comp.view()
+        m.leaf_pos = comp[: 4 * n0].view(n0, 4)
+        m.always = torch.cat([self.always.view(), comp[4 * n0:]])
+        return m
