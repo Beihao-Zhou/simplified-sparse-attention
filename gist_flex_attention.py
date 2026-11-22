@@ -227,7 +227,22 @@ def gist_flex_attention_forward(
         if of["probe_layer"] == module.layer_idx:
             key_orig.retain_grad()
             of["probe"] = key_orig
-        out = attend(replay_block_mask(module, query, H_kv, kwargs, of, gist_kv_perm))
+        Tc, H = of["T_ctx"], query.shape[1]
+        out = attend(gist_block_mask)[:, :Tc]  # prompt rows: the gist mask, as in the prefill
+        # generated rows, padded (masked out) to whole 128-row blocks and at least two:
+        # torch 2.8, once flex has compiled another shape, gets the backward of a <= 128-row
+        # query wrong (forward right; unattended keys get gradient); few-row flex also needs
+        # a power-of-2 GQA group. experiments/flex_short_q_bwd.py reproduces it.
+        R = T - Tc
+        Rp = max(-(-R // 128) * 128, 256)
+        q_gen = torch.nn.functional.pad(q_in[:, :, Tc:], (0, 0, 0, Rp - R))
+        gen = _flex(query.device)(
+            q_gen, k_in, value,
+            block_mask=replay_block_mask(module.layer_idx, H, H_kv, T, Rp, of, gist_kv_perm,
+                                         query.device),
+            score_mod=score_mod, scale=scaling, enable_gqa=hpg_q > 1,
+            kernel_options=_kernel_options())
+        out = torch.cat([out, gen[:, :, :R].transpose(1, 2)], dim=1).contiguous()
         if of["route"]:
             replay_routing(module, query, key_orig, beta, kwargs, of, scaling)
         return out, None

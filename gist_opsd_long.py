@@ -82,33 +82,26 @@ def _replay_masks(records: List[Dict[int, torch.Tensor]], layer: int, num_kv: in
     return M[..., :T]
 
 
-def replay_block_mask(module, query, num_kv, kwargs, of, perm):
-    """BlockMask of a replay layer: rows before of["T_ctx"] keep the gist mask, the others
-    attend to their recorded keys (a head dimension, as KV groups differ)."""
+def replay_block_mask(layer: int, H: int, num_kv: int, T: int, q_len: int, of, perm, device):
+    """BlockMask of the generated rows of a replay layer ([q_len, T]: row r < R is fed token
+    r, rows past R are padding and see nothing; keys in perm order): their recorded keys,
+    with a head dimension as KV groups differ. The
+    prompt rows take the model's gist mask, shared by all layers and heads (an [H, T, T]
+    mask per layer cost ~10 min per step at 150K)."""
     from torch.nn.attention.flex_attention import create_block_mask
 
-    from src.data.gist_flex_mask import make_gist_mask_mod
-
-    B, H, T, _ = query.shape
     hpg = H // num_kv
-    Tc = of["T_ctx"]
-    M = _replay_masks(of["records"], module.layer_idx, num_kv, T, query.device)
-    Mp = M.gather(2, perm[0][None, None, :].expand(num_kv, M.shape[1], T))
-    base = make_gist_mask_mod(kwargs["gist_features"], kv_perm=perm)
-
-    R = Mp.shape[1]
+    M = _replay_masks(of["records"], layer, num_kv, T, device)
+    R = M.shape[1]
+    Mp = M.gather(2, perm[0][None, None, :].expand(num_kv, R, T))
 
     def mod(b, h, q_idx, kv_idx):
         # flex also evaluates padded rows / columns (lengths rounded up to the block size):
         # keep every index in range, an out-of-range read poisoned the backward
-        gen = Mp[h // hpg, (q_idx - Tc).clamp(0, R - 1), kv_idx.clamp(max=T - 1)] & (kv_idx < T)
-        return torch.where(q_idx < Tc, base(b, h, q_idx, kv_idx), gen)
+        return Mp[h // hpg, q_idx.clamp(max=R - 1), kv_idx.clamp(max=T - 1)] & (kv_idx < T) & (q_idx < R)
 
-    import torch._inductor.config as inductor_config
-    with inductor_config.patch(realize_opcount_threshold=10_000, realize_reads_threshold=10_000,
-                               realize_acc_reads_threshold=10_000):
-        return create_block_mask(mod, B, H, T, T, device=str(query.device), BLOCK_SIZE=128,
-                                 _compile=query.is_cuda)
+    return create_block_mask(mod, 1, H, q_len, T, device=str(device), BLOCK_SIZE=128,
+                             _compile=M.is_cuda)
 
 
 def replay_routing(module, query, key, beta, kwargs, of, scaling):
