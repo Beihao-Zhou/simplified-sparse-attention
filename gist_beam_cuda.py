@@ -142,6 +142,32 @@ def beam_decode_fast(module, query, key, value, src, scaling, cfg):
     return out, None
 
 
+def row_kernel_ok(query, key) -> bool:
+    """Kernel B can take a decode row that attends by its gist-mask row (layer 0, summary
+    rows) on the DECODE_SELECT=beam path; the reference and other paths keep SDPA."""
+    return (os.environ.get("DECODE_SELECT") == "beam"
+            and os.environ.get("ATTN_IMPL", "sparse") != "ref" and query.is_cuda
+            and key.dtype == torch.bfloat16 and query.shape[0] == 1 and query.shape[2] == 1
+            and query.shape[3] in (64, 128) and query.shape[1] // key.shape[1] in (1, 2, 4, 6, 7, 8))
+
+
+@torch.no_grad()
+def row_decode(query, key, value, vis, beta, scaling):
+    """One decode row attending exactly to the keys of vis [T] bool, with beta [num_kv, T]
+    (or None) added to the logits, on kernel B: no dense mask, no repeat_kv, no sort, no
+    host sync. Returns (out [1, 1, H, D], idx [num_kv, T] int32 with -1 for keys not seen,
+    a view: the record of gist_opsd_long.py)."""
+    num_kv, T = key.shape[1], key.shape[2]
+    pos = torch.arange(T, device=key.device, dtype=torch.int32)
+    idx = torch.where(vis[:T], pos, -1)[None].expand(num_kv, T)
+    bias = (torch.zeros(num_kv, T, device=key.device) if beta is None
+            else beta.float().contiguous())
+    nsplit = max(8, min(256, -(-T // 128)))
+    out = ext().beam_decode_attn(query.contiguous(), key.contiguous(), value.contiguous(),
+                                 idx.contiguous(), bias, scaling, nsplit)
+    return out, idx
+
+
 class _Buf:
     """A GPU int32 buffer that grows by doubling; view() is the filled part."""
 

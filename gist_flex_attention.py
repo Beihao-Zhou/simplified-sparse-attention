@@ -148,6 +148,13 @@ def gist_flex_attention_forward(
             and attention_mask is not None:
         # A decode step of a flex-built model (gist_session.py): layer 0 is plain attention
         # over the gist-mask row; the other layers go through select_forward.
+        from gist_beam_cuda import row_decode, row_kernel_ok
+        if row_kernel_ok(query, key):
+            from gist_opsd_long import visible_row
+            out, idx = row_decode(query, key, value, visible_row(attention_mask)[0], None, scaling)
+            if Global_data.opsd_record is not None:
+                Global_data.opsd_record[module.layer_idx] = idx
+            return out, None
         from gist_qwen2 import repeat_kv
         hpg = query.shape[1] // key.shape[1]
         out = torch.nn.functional.scaled_dot_product_attention(

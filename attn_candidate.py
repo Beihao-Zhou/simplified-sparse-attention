@@ -1163,6 +1163,18 @@ def _decoding_summary(tmp_ids) -> bool:
 
 
 def _summary_query_decode(module, query, key, value, attention_mask, scaling):
+    from gist_beam_cuda import row_decode, row_kernel_ok
+    if row_kernel_ok(query, key):  # kernel B over the row's keys, beta as its bias
+        from gist_opsd_long import visible_row
+        module._gist_decode_cache = None
+        beta = None
+        if getattr(module, "summary_bias", None) is not None:
+            from gist_lora import extend_beta_cache
+            beta = extend_beta_cache(module, key.shape[2], 1)[0]
+        out, idx = row_decode(query, key, value, visible_row(attention_mask)[0], beta, scaling)
+        if Global_data.opsd_record is not None:
+            Global_data.opsd_record[module.layer_idx] = idx
+        return out, None
     if Global_data.opsd_record is not None:  # OPSD rollout (gist_opsd_long.py)
         from gist_opsd_long import positions, visible_row
         Global_data.opsd_record[module.layer_idx] = positions(
