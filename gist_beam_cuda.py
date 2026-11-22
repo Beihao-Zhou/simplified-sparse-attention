@@ -51,7 +51,7 @@ def select_fast(meta: StepMeta, q, K, beta, cfg, scaling):
     """Level-wise beam selection with kernel A for all KV groups. q [num_kv, HPG, D],
     K [num_kv, T, D], beta [num_kv, T]. Returns per level (cand [num_kv, C] int32 with -1
     empty, sel [num_kv, C] bool)."""
-    from kernels.beam_select import beam_level
+    from kernels.beam_select import beam_level, children
 
     num_kv, hpg, _ = q.shape
     dev = q.device
@@ -64,21 +64,14 @@ def select_fast(meta: StepMeta, q, K, beta, cfg, scaling):
             C = _pow2(G)
             ids = torch.arange(C, device=dev)
             cand = torch.where(ids < G, ids, -1).int()[None].expand(num_kv, C).contiguous()
-        else:
+            forced = ((cand >= lo_l) & (cand >= 0)).to(torch.int8)
+        else:  # children of the selected parents and of the open one (one kernel, no sort)
             cand_up, sel_up = up
             n_forced_up = max(0, meta.closed[l + 1] - meta.lo // 4 ** (l + 1))
             per = cfg.k_at(l + 1) * (hpg if cfg.merge == "union" else 1)
-            smax = min(cand_up.shape[1], per + n_forced_up)
-            par = torch.where(sel_up, cand_up, BIG).sort(dim=1).values[:, :smax]
-            par = torch.cat([par, torch.full((num_kv, 1), meta.closed[l + 1], device=dev,
-                                             dtype=par.dtype)], 1)  # the open parent
-            child = (par[:, :, None] * 4 + torch.arange(4, device=dev)).flatten(1)
-            child = torch.where((par[:, :, None] < BIG).expand(-1, -1, 4).flatten(1) & (child < G),
-                                child, BIG)
-            C = _pow2(child.shape[1])
-            child = torch.nn.functional.pad(child.sort(dim=1).values, (0, C - child.shape[1]), value=BIG)
-            cand = torch.where(child < BIG, child, -1).int().contiguous()
-        forced = ((cand >= lo_l) & (cand >= 0)).to(torch.int8)
+            smax = min(cand_up.shape[1], per + n_forced_up)  # bounds the selected parents
+            C = _pow2(4 * (smax + 1))
+            cand, forced = children(cand_up, sel_up.contiguous(), G, meta.closed[l + 1], lo_l, C)
         picked, _ = beam_level(q, K, beta, meta.gpos[l], cand, forced, cfg.k_at(l), scaling,
                                union=cfg.merge == "union")
         sel = picked | forced.bool()

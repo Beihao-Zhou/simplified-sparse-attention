@@ -256,3 +256,41 @@ def test_incremental_tree_matches_rebuilt_meta(levels, window):
         checked += 1
     assert checked > 50
 
+
+
+def _children_ref(cand_up, sel_up, G, open_parent, lo, smax, C):
+    """The torch candidate generation the children kernel replaced (sort + pad)."""
+    BIG = 1 << 30
+    num_kv = cand_up.shape[0]
+    par = torch.where(sel_up, cand_up, BIG).sort(dim=1).values[:, :smax]
+    par = torch.cat([par, torch.full((num_kv, 1), open_parent, device=par.device, dtype=par.dtype)], 1)
+    child = (par[:, :, None] * 4 + torch.arange(4, device=par.device)).flatten(1)
+    child = torch.where((par[:, :, None] < BIG).expand(-1, -1, 4).flatten(1) & (child < G), child, BIG)
+    child = torch.nn.functional.pad(child.sort(dim=1).values, (0, C - child.shape[1]), value=BIG)
+    cand = torch.where(child < BIG, child, -1).int()
+    return cand, ((cand >= lo) & (cand >= 0)).to(torch.int8)
+
+
+@pytest.mark.parametrize("n_up,n_sel,G_extra", [(40, 5, 3), (300, 300, 0), (1000, 1, 1), (17, 0, 2)])
+def test_children_kernel_matches_sort(n_up, n_sel, G_extra):
+    """Bit-identical to the sort-based generation: selected parents' children, then the
+    open parent's, those < G, ascending; forced from lo."""
+    sys.path.insert(0, ".")
+    from gist_beam_cuda import _pow2
+    from kernels.beam_select import children
+
+    torch.manual_seed(n_up)
+    num_kv = 3
+    C_up = _pow2(n_up)
+    ids = torch.arange(C_up, device="cuda")
+    cand_up = torch.where(ids < n_up, ids, -1).int()[None].expand(num_kv, C_up).contiguous()
+    sel_up = torch.zeros(num_kv, C_up, dtype=torch.bool, device="cuda")
+    for g in range(num_kv):
+        sel_up[g, torch.randperm(n_up, device="cuda")[:n_sel]] = True
+    G = 4 * n_up + G_extra            # the open parent n_up has G_extra closed children
+    lo = 4 * max(n_up - 2, 0) + 1     # forced: the last leaves
+    smax = min(C_up, n_sel + 2)
+    C = _pow2(4 * (smax + 1))
+    got = children(cand_up, sel_up, G, n_up, lo, C)
+    want = _children_ref(cand_up, sel_up, G, n_up, lo, smax, C)
+    assert torch.equal(got[0], want[0]) and torch.equal(got[1], want[1])

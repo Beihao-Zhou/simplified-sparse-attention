@@ -59,6 +59,42 @@ def _kth(keys, k: tl.constexpr):
     return t
 
 
+@triton.jit(do_not_specialize=["G", "open_parent", "lo"])  # change every step: no recompiles
+def _children_kernel(cand_up_ptr, sel_up_ptr, cand_ptr, forced_ptr, G, open_parent, lo,
+                     C_UP: tl.constexpr, C: tl.constexpr):
+    """The next level's candidates of one KV group: the children of the selected parents,
+    then of the open parent, those < G, in ascending node id, compacted from slot 0; the
+    caller fills cand with -1 and forced with 0. Parents are ascending in their slots and
+    children < G form a prefix of each parent's 4, so prefix sums give the sorted order."""
+    g = tl.program_id(0)
+    s = tl.arange(0, C_UP)
+    par = tl.load(cand_up_ptr + g * C_UP + s)
+    keep = (tl.load(sel_up_ptr + g * C_UP + s) != 0) & (par >= 0)
+    cnt = tl.where(keep, tl.minimum(tl.maximum(G - par * 4, 0), 4), 0)
+    excl = tl.cumsum(cnt, axis=0) - cnt
+    for j in tl.static_range(4):
+        child = par * 4 + j
+        ok = (j < cnt) & (excl + j < C)  # C covers them (the caller's bound); never write past
+        tl.store(cand_ptr + g * C + excl + j, child, mask=ok)
+        tl.store(forced_ptr + g * C + excl + j, (child >= lo).to(tl.int8), mask=ok)
+    base = tl.sum(cnt, axis=0)
+    for j in tl.static_range(4):
+        child = open_parent * 4 + j
+        if (child < G) & (base + j < C):
+            tl.store(cand_ptr + g * C + base + j, child)
+            tl.store(forced_ptr + g * C + base + j, (child >= lo).to(tl.int8))
+
+
+def children(cand_up, sel_up, G: int, open_parent: int, lo: int, C: int):
+    """(cand [num_kv, C] int32, -1 empty; forced [num_kv, C] int8) of the level below."""
+    num_kv, c_up = cand_up.shape
+    cand = torch.full((num_kv, C), -1, dtype=torch.int32, device=cand_up.device)
+    forced = torch.zeros((num_kv, C), dtype=torch.int8, device=cand_up.device)
+    _children_kernel[(num_kv,)](cand_up, sel_up, cand, forced, G, open_parent, lo,
+                                C_UP=c_up, C=C)
+    return cand, forced
+
+
 @triton.jit
 def _pick_kernel(s_ptr, out_ptr, k,
                  HPG: tl.constexpr, HPG_P: tl.constexpr, C: tl.constexpr, UNION: tl.constexpr):
