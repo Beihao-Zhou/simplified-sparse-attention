@@ -1,0 +1,23 @@
+docs/adr/0003-training-selection-kernels.md
+  s_466735a13fa48a::t_b430a2bdd8ec65 1-46
+results/select_gate.jsonl
+  s_466735a13fa48a::t_d7ddd8bc2b8740 1-7
+results/spikes.csv
+  s_466735a13fa48a::t_d7ddd8bc2b8740 107-116
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "fc2d003958d0f5983bb5ea233b5cbd1ba768b8a7",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
