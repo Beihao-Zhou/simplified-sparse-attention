@@ -1,0 +1,24 @@
+experiments/sel_mask_density.py
+  s_466735a13fa48a::t_737de83af27289 1-27,29-53
+  s_466735a13fa48a::t_1d51fef2bedc53 28
+gist_stage1_trainer.py
+  s_466735a13fa48a::t_cc1e6d4552183b 226-229,232,234
+experiments/stage1_select_profile.py
+  s_466735a13fa48a::t_e761a0a83b1156 1-54
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "92dc5c0e763d72ac47a6419912c8ad0b1394ae06",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
