@@ -116,7 +116,10 @@ def main():
     ap.add_argument("--model", default="Qwen/Qwen2.5-0.5B-Instruct", help="tokenizer and chat template")
     ap.add_argument("--row_groups", type=int, nargs="+", default=[0])
     ap.add_argument("--max_rows", type=int, default=0, help="per row group, 0 = all")
-    ap.add_argument("--heldout_frac", type=float, default=0.02)
+    ap.add_argument("--heldout_frac", type=float, default=0.05,
+                    help="issues held out, by a hash of the issue id; applied when the splits "
+                    "are assembled, so it can change without converting again (a larger "
+                    "fraction holds out a superset)")
     ap.add_argument("--cache", default="", help="directory to keep downloaded row groups in")
     ap.add_argument("--workers", type=int, default=os.cpu_count())
     args = ap.parse_args()
@@ -169,13 +172,15 @@ def main():
         print(f"row group {rg}: {n} rows", flush=True)
     stats = [json.load(open(os.path.join(out_dir, "parts", f"rg{rg:02d}", "stats.json")))
              for rg in args.row_groups]
-    for split in ("train", "heldout"):
-        parts = [os.path.join(out_dir, "parts", f"rg{rg:02d}", split) for rg in args.row_groups]
-        parts = [datasets.load_from_disk(x) for x in parts if os.path.exists(x)]
-        if parts:
-            datasets.concatenate_datasets(parts).save_to_disk(os.path.join(out_dir, split))
-    train_n = sum(s["split"][0] for s in stats)
-    held_n = sum(s["split"][1] for s in stats)
+    parts = [os.path.join(out_dir, "parts", f"rg{rg:02d}", split)
+             for rg in args.row_groups for split in ("train", "heldout")]
+    allrows = datasets.concatenate_datasets([datasets.load_from_disk(x) for x in parts if os.path.exists(x)])
+    is_held = [heldout(i, args.heldout_frac) for i in allrows["instance_id"]]
+    for split, keep in (("train", False), ("heldout", True)):
+        idx = [k for k, h in enumerate(is_held) if h == keep]
+        allrows.select(idx).save_to_disk(os.path.join(out_dir, split))
+    held_n = sum(is_held)
+    train_n = len(is_held) - held_n
     L = np.array([x for s in stats for x in s["length"]])
     P = np.array([x for s in stats for x in s["n_pinned"]])
     tc = np.array([x for s in stats for x in s["tool_chars"]])

@@ -6,16 +6,16 @@ Each sample keeps one system block (system prompt + tool definitions, the pinned
 from its first trajectory and drops it from the others, asserting the blocks are the
 same; turn ids continue across trajectories. Trajectories are taken in (repo, id) order,
 so neighbours come from the same repository where the held-out split has several, and
-whole trajectories are added while the sample stays within the target length. No
-trajectory is used twice within one length; every sample records its sources, and the
-same inputs give the same samples.
+whole trajectories are added while the sample stays within the target length. Each
+issue contributes one trajectory (its longest attempt), so a sample never repeats a
+task; no trajectory is used twice within one length; every sample records its sources,
+and the same inputs give the same samples.
 
     python experiments/agent_longeval.py --src /data/agent_data --out /data/agent_longeval \
         --lens 262144 1048576 --n 20
 """
 
 import argparse
-import glob
 import json
 import os
 from typing import Dict, List
@@ -23,6 +23,19 @@ from typing import Dict, List
 
 def repo_of(instance_id: str) -> str:
     return instance_id.rsplit("-", 1)[0]
+
+
+def one_per_issue(rows: List[Dict]) -> List[Dict]:
+    """The longest attempt of each issue (ties: the lower trajectory id). The dataset has a
+    median of 7 attempts per issue; consecutive attempts at one task repeat what the
+    earlier ones read, which would make long-range retrieval look easier than it is."""
+    best: Dict[str, Dict] = {}
+    for r in rows:
+        b = best.get(r["instance_id"])
+        key = (-len(r["input_ids"]), r["trajectory_id"])
+        if b is None or key < (-len(b["input_ids"]), b["trajectory_id"]):
+            best[r["instance_id"]] = r
+    return list(best.values())
 
 
 def concat(rows: List[Dict], target: int, n: int) -> List[Dict]:
@@ -62,25 +75,18 @@ def concat(rows: List[Dict], target: int, n: int) -> List[Dict]:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--src", required=True, help="agent_data output (its parts/rg*/heldout are read)")
+    ap.add_argument("--src", required=True, help="agent_data output (its heldout split is read)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--lens", type=int, nargs="+", default=[262144, 1048576])
     ap.add_argument("--n", type=int, default=20)
-    ap.add_argument("--row_groups", type=int, nargs="+", default=None,
-                    help="which converted row groups to draw from (fixes the samples while a "
-                    "conversion is still adding row groups)")
     args = ap.parse_args()
     import datasets
 
-    parts = sorted(glob.glob(os.path.join(os.path.expanduser(args.src), "parts", "rg*", "heldout")))
-    if args.row_groups is not None:
-        want = {f"rg{g:02d}" for g in args.row_groups}
-        parts = [p for p in parts if os.path.basename(os.path.dirname(p)) in want]
-        missing = want - {os.path.basename(os.path.dirname(p)) for p in parts}
-        if missing:
-            raise FileNotFoundError(f"row groups not converted yet: {sorted(missing)}")
-    rows = [r for p in parts for r in datasets.load_from_disk(p)]
-    print(f"{len(rows)} held-out trajectories from {len(parts)} row groups", flush=True)
+    parts = [os.path.join(os.path.expanduser(args.src), "heldout")]
+    rows = list(datasets.load_from_disk(parts[0]))
+    n_traj = len(rows)
+    rows = one_per_issue(rows)
+    print(f"{n_traj} held-out trajectories, {len(rows)} issues (longest attempt each)", flush=True)
     report = {}
     for L in args.lens:
         samples = concat(rows, L, args.n)

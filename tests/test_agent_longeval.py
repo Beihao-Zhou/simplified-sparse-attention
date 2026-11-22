@@ -57,3 +57,17 @@ def test_a_different_system_block_is_an_error():
     b["input_ids"][0] = 6
     with pytest.raises(ValueError):
         concat([a, b], 10**6, 1)
+
+
+def test_one_attempt_per_issue():
+    from experiments.agent_longeval import one_per_issue
+
+    rng = random.Random(3)
+    rows = [_row(i, f"org__r{i % 3}", rng.randint(2, 9), rng) for i in range(12)]
+    for r in rows:
+        r["instance_id"] = f"org__r{int(r['trajectory_id'][1:]) % 3}-1"  # 3 issues, 4 attempts
+    kept = one_per_issue(rows)
+    assert len(kept) == 3 and len({r["instance_id"] for r in kept}) == 3
+    for r in kept:
+        same = [x for x in rows if x["instance_id"] == r["instance_id"]]
+        assert len(r["input_ids"]) == max(len(x["input_ids"]) for x in same)
