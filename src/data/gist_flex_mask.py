@@ -277,17 +277,20 @@ def make_teacher_mask_mod(f: GistMaskFeatures, kind: str, kv_perm: Optional[torc
 
 
 def gist_pool_permutation(f: GistMaskFeatures) -> torch.Tensor:
-    """Key order [raw tokens | summary tokens], each in original order.
+    """Key order [raw tokens | level-0 summaries | level-1 | ...], each in original order.
 
     In the original order a summary token lands in every key block, so no block can
-    be skipped; pooled, the raw keys form a band around the diagonal. Returns perm
-    [B, T] (slot j holds position perm[b, j]) for gathering K/V and for
+    be skipped; pooled, the raw keys form a band around the diagonal. Grouped by level,
+    the summaries a query sees at one level are a contiguous run: with all levels
+    interleaved, every summary block over the old part held a few visible top-level
+    summaries among invisible lower ones, so all of them were partial (158K agent
+    prompt: 170 partial blocks per query block, 2.3 s per layer). Returns perm [B, T]
+    (slot j holds position perm[b, j]) for gathering K/V and for
     `make_gist_mask_mod(f, kv_perm=perm)`.
     """
-    is_summary = f.level >= 0                                        # [B, T]
-    T = is_summary.shape[1]
-    pos = torch.arange(T, device=is_summary.device)
-    return torch.argsort(is_summary.long() * T + pos[None, :], dim=1)
+    T = f.level.shape[1]
+    pos = torch.arange(T, device=f.level.device)
+    return torch.argsort((f.level.long() + 1) * T + pos[None, :], dim=1)  # raw: level -1
 
 
 def make_gist_block_mask(
