@@ -1,0 +1,23 @@
+gist_lora.py
+  s_466735a13fa48a::t_a8f60d0acdfb13 41-43
+  s_466735a13fa48a::t_e5b65961370e94 168-176,178-182
+  s_466735a13fa48a::t_173aca3f58ccd3 193
+gist_beam.py
+  s_466735a13fa48a::t_91a11dd00e405e 274,276
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "92c24efa59da9bdfde20fbbbff0e52e98a8a1610",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
