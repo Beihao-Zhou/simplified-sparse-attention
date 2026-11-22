@@ -16,7 +16,10 @@ while true; do
   elif [ "$state" = RUNNING ]; then
     ip=$($N compute instance get --id "$VM_ID" --format json | python3 -c \
       "import sys,json;print(json.load(sys.stdin)['status']['network_interfaces'][0]['public_ip_address']['address'].split('/')[0])")
-    st=$(ssh -o ConnectTimeout=20 -o StrictHostKeyChecking=accept-new "$HOST_USER@$ip" "cd $REPO;
+    # keepalive + a hard timeout: an ssh into a VM that gets preempted mid-command otherwise
+    # hangs forever (it once hid a preemption for 2 hours)
+    st=$(timeout 120 ssh -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
+      -o StrictHostKeyChecking=accept-new "$HOST_USER@$ip" "cd $REPO;
       if grep -q '$DONE_PATTERN' $LOG 2>/dev/null; then echo done;
       elif pgrep -f '^bash $QUEUE' >/dev/null; then echo running;  # not this ssh shell, whose command line names $QUEUE too
       else nohup bash $QUEUE >> $LOG 2>&1 < /dev/null & echo launched; fi" 2>/dev/null)
