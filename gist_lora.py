@@ -38,6 +38,9 @@ class LoRALinear(nn.Module):
         return self.base.weight
 
     def forward(self, x):
+        if Global_data.decoding_summary is False and (self.gist_rows_only or len(self.lora_A) > 1):
+            # a decode step feeding a raw token (gist_session.py): the row-gated delta is 0
+            return self.base(x)
         xf = x.to(torch.float32)
         if len(self.lora_A) == 1:
             delta = (xf @ self.lora_A[0].t()) @ self.lora_B[0].t()
@@ -162,11 +165,21 @@ def augment_with_beta(
     the last output coordinate. beta is cached per layer and extended by every forward:
     zero for raw tokens, b + u . x for summaries (including ones decoded at generation).
     """
-    T = key.shape[2]
-    q_len = query.shape[2]
+    cache = extend_beta_cache(module, key.shape[2], query.shape[2])
+    q = torch.cat([query, query.new_ones(*query.shape[:3], 1)], dim=-1)
+    k = torch.cat([key, (cache[..., None] / scaling).to(key.dtype)], dim=-1)
+    v = torch.cat([value, value.new_zeros(*value.shape[:3], 1)], dim=-1)
+    return q, k, v
+
+
+def extend_beta_cache(module, T: int, q_len: int) -> torch.Tensor:
+    """Extend module._beta_cache [B, H_kv, T] by the q_len new rows and return it."""
     cache = getattr(module, "_beta_cache", None)
-    x = getattr(module, "_bias_x", None)
-    beta = module.summary_bias(x, Global_data.lora_row_level)  # [B, H_kv, q_len]; 0 on raw rows
+    if Global_data.decoding_summary is False:  # a raw decode row (gist_session.py): beta 0
+        b = module.summary_bias.b
+        beta = torch.zeros(1, b.shape[1], q_len, dtype=b.dtype, device=b.device)
+    else:
+        beta = module.summary_bias(module._bias_x, Global_data.lora_row_level)  # 0 on raw rows
     if T == q_len:  # a fresh prefix
         cache = beta
     elif cache is not None and cache.shape[2] + q_len == T:  # a prefill chunk or decode step
@@ -177,7 +190,4 @@ def augment_with_beta(
             f"{None if cache is None else cache.shape[2]}"
         )
     module._beta_cache = cache
-    q = torch.cat([query, query.new_ones(*query.shape[:3], 1)], dim=-1)
-    k = torch.cat([key, (cache[..., None] / scaling).to(key.dtype)], dim=-1)
-    v = torch.cat([value, value.new_zeros(*value.shape[:3], 1)], dim=-1)
-    return q, k, v
+    return cache

@@ -271,10 +271,9 @@ def beam_decode(module, query, key, value, ids, scaling):
     T = key.shape[2]
     beta = None
     if getattr(module, "summary_bias", None) is not None:
-        from gist_lora import augment_with_beta
+        from gist_lora import extend_beta_cache
 
-        augment_with_beta(module, query, key, value, scaling)  # extends module._beta_cache
-        beta = module._beta_cache[0]                           # [H_kv, T]
+        beta = extend_beta_cache(module, T, query.shape[2])[0]  # [H_kv, T]
     if (os.environ.get("ATTN_IMPL", "sparse") != "ref" and query.is_cuda
             and key.dtype == torch.bfloat16):
         # kernels A and B (gist_beam_cuda.py); this function stays the reference. A session
