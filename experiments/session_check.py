@@ -2,6 +2,7 @@
 [q, T] mask), then decode a few steps. Reports time and peak memory per append.
 
     ATTN_IMPL=ref python experiments/session_check.py --total 131072 --pieces 4
+    DECODE_SELECT=beam python experiments/session_check.py   # kernels A and B (#20)
 """
 
 import argparse
@@ -32,7 +33,8 @@ def main():
     ap.add_argument("--pieces", type=int, default=4)
     ap.add_argument("--steps", type=int, default=3)
     args = ap.parse_args()
-    assert os.environ.get("ATTN_IMPL") == "ref", "0.5B (head_dim 64) decodes on the eager path"
+    assert os.environ.get("ATTN_IMPL") == "ref" or os.environ.get("DECODE_SELECT") == "beam", \
+        "the 2-level CUDA kernel needs head_dim 128: use ATTN_IMPL=ref or DECODE_SELECT=beam"
     tok = AutoTokenizer.from_pretrained(args.model)
     model = GistQwen2ForCausalLM.from_pretrained(
         args.model, dtype=torch.bfloat16, attn_implementation=gist_flex_attention.GIST_FLEX).cuda().eval()
@@ -63,8 +65,13 @@ def main():
         t0 = time.time()
         logits = s.step(int(raw[j]))
         torch.cuda.synchronize()
-        print(json.dumps({"step": j, "tokens": len(s.ids), "sec": round(time.time() - t0, 2),
-                          "finite": bool(torch.isfinite(logits).all())}), flush=True)
+        rec = {"step": j, "tokens": len(s.ids), "sec": round(time.time() - t0, 3),
+               "finite": bool(torch.isfinite(logits).all())}
+        lv = getattr(model.model.layers[1].self_attn, "_beam_levels", None)
+        if lv is not None:  # DECODE_SELECT=beam on kernels A/B: per layer and KV group
+            rec["scored"] = sum(int((c[0] >= 0).sum()) for c, _ in lv)
+            rec["selected"] = [int(sl[0].sum()) for _, sl in lv]
+        print(json.dumps(rec), flush=True)
 
 
 if __name__ == "__main__":

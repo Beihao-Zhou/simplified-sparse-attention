@@ -1156,6 +1156,9 @@ def _decoding_summary(tmp_ids) -> bool:
     """True when the decoded token is a summary inserted at generation time."""
     if not Global_data.decode_gists or tmp_ids is None:
         return False
+    told = getattr(Global_data, "decoding_summary", None)  # set by gist_session.py: no sync
+    if told is not None:
+        return told
     return bool(torch.isin(tmp_ids[0, -1], torch.tensor(Global_data.gist_token_id, device=tmp_ids.device)))
 
 

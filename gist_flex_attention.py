@@ -192,13 +192,26 @@ def gist_flex_attention_forward(
         else:
             q_in, k_in = fold_beta(query, key, beta_p, scaling)
 
+    hpg_q = query.shape[1] // H_kv
+    k_att, v_att, gqa = k_in, value, hpg_q > 1
+    if gqa and hpg_q & (hpg_q - 1) and query.shape[2] < 256:
+        # Few query rows (a short append, gist_session.py): compiled flex takes its decoding
+        # kernel, which needs a power-of-2 group size (Qwen2.5 0.5B and 7B-1M have 7), so
+        # repeat K/V per query head. ponytail: H/H_kv x the cache in transient memory (7B at
+        # 1M: ~7 GB per layer); pad the append to 256 rows instead if that becomes a limit.
+        from gist_qwen2 import repeat_kv
+        k_att, v_att, gqa = repeat_kv(k_in, hpg_q), repeat_kv(value, hpg_q), False
+        if score_mod is not None:
+            def score_mod(score, b, h, q_idx, kv_idx):  # noqa: F811  (beta per KV head)
+                return score + beta_p[b, h // hpg_q, kv_idx]
+
     def attend(block_mask):
         out = _flex(query.device)(
-            q_in, k_in, value,
+            q_in, k_att, v_att,
             block_mask=block_mask,
             score_mod=score_mod,
             scale=scaling,
-            enable_gqa=query.shape[1] != H_kv,
+            enable_gqa=gqa,
             kernel_options=_kernel_options(),
         )
         return out.transpose(1, 2).contiguous()

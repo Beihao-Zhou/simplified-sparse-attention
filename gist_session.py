@@ -34,12 +34,15 @@ class GistSession:
         self.turn: List[int] = []
         self.past = None
         self.device = next(model.parameters()).device
+        self._buf = torch.zeros(3, 0, dtype=torch.long, device=self.device)  # ids, pinned, turn
+        self._n_raw = []  # raw tokens up to and including position i
 
     # -- bookkeeping ---------------------------------------------------------------------
 
     def _push(self, raw: Sequence[int], pinned: Sequence[bool], turn: Sequence[int]) -> int:
         """Gist raw tokens onto the stream; returns how many tokens (raw + summaries) were added."""
         n0 = len(self.ids)
+        gset = set(self.gist_ids)
         for t, p, tr in zip(raw, pinned, turn):
             self.ids.append(int(t))
             self.pinned.append(bool(p))
@@ -48,20 +51,24 @@ class GistSession:
                 self.ids.append(g)
                 self.pinned.append(False)
                 self.turn.append(int(tr))  # a summary takes the turn of the raw token before it
+        n = (self._n_raw[-1] if self._n_raw else 0)
+        for t in self.ids[n0:]:
+            n += t not in gset
+            self._n_raw.append(n)
+        new = torch.tensor([self.ids[n0:], self.pinned[n0:], self.turn[n0:]], dtype=torch.long,
+                           device=self.device)
+        self._buf = torch.cat([self._buf, new], 1)  # ponytail: amortized copy, grows the buffer each push
         return len(self.ids) - n0
 
     def _last_pos(self, upto: int) -> torch.Tensor:
         """RoPE position of token upto-1: raw tokens keep their raw index, a summary shares
         the position of the raw token before it. Computed from this session's own ids, not
         the global Global_data.last_pos, so sessions can interleave."""
-        g = set(self.gist_ids)
-        n_raw = sum(1 for t in self.ids[:upto] if t not in g)
-        return torch.tensor([[n_raw - 1]], device=self.device)
+        return torch.tensor([[(self._n_raw[upto - 1] if upto else 0) - 1]], device=self.device)
 
     def _tensors(self):
-        dev = self.device
-        return (torch.tensor([self.ids], device=dev), torch.tensor([self.pinned], device=dev),
-                torch.tensor([self.turn], device=dev))
+        b = self._buf
+        return b[0:1], b[1:2].bool(), b[2:3]
 
     # -- prefill -------------------------------------------------------------------------
 
@@ -120,6 +127,7 @@ class GistSession:
                 ids, pin, tr = (x[:, : i + 1] for x in self._tensors())
                 Global_data.beam_segments = (pin[0], tr[0])
                 Global_data.last_pos = self._last_pos(i)
+                Global_data.decoding_summary = self.ids[i] in self.gist_ids
                 out = self.model(
                     input_ids=ids[:, -1:], attention_mask=torch.ones_like(ids),
                     attention_mask_gist=self._row(ids, pin, tr), past_key_values=self.past,
@@ -129,4 +137,5 @@ class GistSession:
                     logits = out.logits[0, -1]
         finally:
             Global_data.decode_gists = saved
+            Global_data.decoding_summary = None
         return logits

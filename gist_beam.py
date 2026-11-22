@@ -260,6 +260,8 @@ def beam_decode(module, query, key, value, ids, scaling):
     """One decode step of one layer: query [1, H, 1, d], key / value [1, H_kv, T, d],
     ids [1, T]. Records the selected node ids per KV group on module._beam_ids (and in
     Global_data.beam_trace when that is a list), returns (out [1, 1, H, d], None)."""
+    import os
+
     from gist_utils import Global_data
 
     if query.shape[0] != 1:
@@ -273,6 +275,12 @@ def beam_decode(module, query, key, value, ids, scaling):
 
         augment_with_beta(module, query, key, value, scaling)  # extends module._beta_cache
         beta = module._beta_cache[0]                           # [H_kv, T]
+    if (os.environ.get("ATTN_IMPL", "sparse") != "ref" and query.is_cuda
+            and key.dtype == torch.bfloat16):
+        # kernels A and B (gist_beam_cuda.py); this function stays the reference
+        from gist_beam_cuda import beam_decode_fast
+
+        return beam_decode_fast(module, query, key, value, tree, scaling, cfg)
     H, H_kv = query.shape[1], key.shape[1]
     hpg = H // H_kv
     rows = torch.tensor([T - 1], device=query.device)

@@ -33,6 +33,7 @@ class Global_data:
     raw_window = 0
     window_turns = 0  # R6 also requires turn[q] - turn[k] < window_turns (agent trajectories)
     beam_segments = None  # DECODE_SELECT=beam: (pinned [T], turn [T]) of the sequence
+    decoding_summary = None  # decode_gists: whether the token being fed is a summary (None: look)
     beam_trace = None  # DECODE_SELECT=beam: a list collects (layer, ids per KV group) per call
     # Non-selective training computes the LM loss in chunks of this many tokens instead of
     # materializing [B, T, vocab] fp32 logits; 0 = off.
