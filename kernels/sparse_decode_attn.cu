@@ -44,8 +44,9 @@ __device__ __forceinline__ float warp_reduce_sum(float v) {
 // Parallel compaction: MANY blocks per group (grid (num_kv, blocks_per_group))
 // instead of 1 — the v1 build_compact_idx launches only num_kv(=4) blocks for an
 // O(k_len) scan (~0.4% GPU util => it dominates). Warp-aggregated global atomicAdd
-// minimizes contention. counts[] must be zeroed before launch. Order is arbitrary
-// (fine: attention is order-independent). count may exceed cap; readers clamp.
+// minimizes contention. counts[] must be zeroed before launch. The order is arbitrary
+// (the launcher sorts it: floating-point sums are not order-independent). count may
+// exceed cap; readers clamp.
 __global__ void build_compact_idx_kernel(
     const uint8_t* __restrict__ sel0_any, const uint8_t* __restrict__ sel1_any,
     const int* __restrict__ chunk_l0, const int* __restrict__ chunk_l1,
@@ -251,7 +252,8 @@ torch::Tensor sparse_decode_attn_compact(
     int G0p1 = sel0_any.size(1), G1p1 = sel1_any.size(1);
     if (cap > k_len) cap = k_len;
     auto iopt = torch::TensorOptions().dtype(torch::kInt32).device(q.device());
-    auto idx_list = torch::empty({num_kv, (long)cap}, iopt);
+    // INT_MAX past count, so the sort below puts the kept keys first, ascending
+    auto idx_list = torch::full({num_kv, (long)cap}, INT_MAX, iopt);
     auto counts = torch::zeros({num_kv}, iopt);   // zeroed for the parallel atomicAdd
     auto stream = at::cuda::getCurrentCUDAStream();
 
@@ -267,6 +269,12 @@ torch::Tensor sparse_decode_attn_compact(
         idx_list.data_ptr<int>(), counts.data_ptr<int>(),
         num_kv, k_len, (int)cap, G0p1, G1p1, blocks_per_group);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
+    // The atomicAdd order changes from run to run, and with it which keys each split
+    // sums and in what order: the output differed in its last bits and greedy decoding
+    // flipped near-ties (#18: the same commit 7-8/10 identical across runs). Sorting
+    // makes it run-to-run deterministic. ponytail: when count > cap, which keys survive
+    // still depends on the race; size cap for the selection if that ever happens.
+    idx_list = std::get<0>(idx_list.sort(1));
 
     auto fopt = torch::TensorOptions().dtype(torch::kFloat32).device(q.device());
     auto partial_m = torch::empty({H, (long)nsplit}, fopt);
