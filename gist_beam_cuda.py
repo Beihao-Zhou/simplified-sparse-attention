@@ -60,11 +60,14 @@ def select_fast(meta: StepMeta, q, K, beta, cfg, scaling):
     for l in range(meta.L - 1, -1, -1):
         G = meta.closed[l]
         lo_l = meta.lo // 4 ** l
-        if up is None:  # top level: every closed node
-            C = _pow2(G)
-            ids = torch.arange(C, device=dev)
-            cand = torch.where(ids < G, ids, -1).int()[None].expand(num_kv, C).contiguous()
-            forced = ((cand >= lo_l) & (cand >= 0)).to(torch.int8)
+        if up is None:  # top level: every closed node; the same for all layers of a step
+            top = getattr(meta, "_top", None)
+            if top is None or top[0] != num_kv:
+                C = _pow2(G)
+                ids = torch.arange(C, device=dev)
+                cand = torch.where(ids < G, ids, -1).int()[None].expand(num_kv, C).contiguous()
+                top = meta._top = (num_kv, cand, ((cand >= lo_l) & (cand >= 0)).to(torch.int8))
+            _, cand, forced = top
         else:  # children of the selected parents and of the open one (one kernel, no sort)
             cand_up, sel_up = up
             n_forced_up = max(0, meta.closed[l + 1] - meta.lo // 4 ** (l + 1))
@@ -81,20 +84,11 @@ def select_fast(meta: StepMeta, q, K, beta, cfg, scaling):
 
 
 def key_list(meta: StepMeta, levels, coarse: bool):
-    """[num_kv, cap] int32 key positions for kernel B (-1 = empty)."""
-    cand0, sel0 = levels[0]
-    num_kv = cand0.shape[0]
-    parts = []
-    if meta.closed[0]:
-        leaf = torch.where(sel0, cand0, 0).long()
-        pos = meta.leaf_pos[leaf]                                      # [num_kv, C0, 4]
-        parts.append(torch.where(sel0[..., None], pos, -1).flatten(1))
-    for l, (cand, sel) in enumerate(levels):
-        show = (cand >= 0) & ((~sel) if coarse else sel)
-        if meta.closed[l]:
-            parts.append(torch.where(show, meta.gpos[l][cand.clamp(min=0).long()], -1))
-    parts.append(meta.always[None].expand(num_kv, -1))
-    return torch.cat(parts, 1).int().contiguous()
+    """[num_kv, cap] int32 key positions for kernel B (-1 = empty), one Triton launch."""
+    from kernels.beam_select import key_list as kernel
+
+    return kernel(levels, meta.gpos, meta.closed, meta.leaf_pos.contiguous(),
+                  meta.always.contiguous(), coarse)
 
 
 _META = {"src": None, "n": None, "meta": None}

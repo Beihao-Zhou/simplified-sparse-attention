@@ -131,6 +131,67 @@ def children(cand_up, sel_up, G: int, open_parent: int, lo: int, C: int):
     return cand, forced
 
 
+@triton.jit
+def _level_part(o, g, val, cand_ptr, sel_ptr, gpos_ptr, C, off, COARSE: tl.constexpr):
+    """Slots [off, off + C): gpos[cand] where shown (selected, or unselected with coarse)."""
+    m = (o >= off) & (o < off + C)
+    i = tl.where(m, o - off, 0)
+    c = tl.load(cand_ptr + g * C + i, mask=m, other=-1)
+    s = tl.load(sel_ptr + g * C + i, mask=m, other=0) != 0
+    show = m & (c >= 0) & ((~s) if COARSE else s)
+    gp = tl.load(gpos_ptr + tl.where(show, c, 0), mask=show, other=-1)
+    return tl.where(show, gp, val)
+
+
+@triton.jit(do_not_specialize=["cap", "n_leaf", "n_always", "a_off",
+                               "C0", "C1", "C2", "C3", "o0", "o1", "o2", "o3"])
+def _key_list_kernel(out_ptr, cap, leaf_pos_ptr, n_leaf, always_ptr, n_always, a_off,
+                     c0, s0, p0, C0, o0, c1, s1, p1, C1, o1, c2, s2, p2, C2, o2,
+                     c3, s3, p3, C3, o3, COARSE: tl.constexpr, BLOCK: tl.constexpr):
+    g = tl.program_id(0)
+    o = tl.program_id(1) * BLOCK + tl.arange(0, BLOCK)
+    val = tl.full([BLOCK], -1, tl.int32)
+    # leaf part [0, n_leaf): the 4 raw positions of each selected level-0 node
+    m = o < n_leaf
+    slot = tl.where(m, o // 4, 0)
+    c = tl.load(c0 + g * C0 + slot, mask=m, other=-1)
+    sel = m & (tl.load(s0 + g * C0 + slot, mask=m, other=0) != 0)
+    lp = tl.load(leaf_pos_ptr + tl.where(sel, c, 0) * 4 + o % 4, mask=sel, other=-1)
+    val = tl.where(sel, lp, val)
+    val = _level_part(o, g, val, c0, s0, p0, C0, o0, COARSE)
+    val = _level_part(o, g, val, c1, s1, p1, C1, o1, COARSE)
+    val = _level_part(o, g, val, c2, s2, p2, C2, o2, COARSE)
+    val = _level_part(o, g, val, c3, s3, p3, C3, o3, COARSE)
+    m = (o >= a_off) & (o < a_off + n_always)
+    val = tl.where(m, tl.load(always_ptr + tl.where(m, o - a_off, 0), mask=m, other=-1), val)
+    tl.store(out_ptr + g * cap + o, val, mask=o < cap)
+
+
+def key_list(levels, gpos, closed, leaf_pos, always, coarse: bool):
+    """Kernel B's key list [num_kv, cap] int32 (-1 empty) in one launch: [the raw positions
+    of the selected level-0 nodes (4 per slot) | per level with closed nodes, gpos of the
+    shown candidates (selected; unselected with coarse) | always]."""
+    assert 1 <= len(levels) <= 4, "the key list kernel takes up to 4 levels"
+    num_kv = levels[0][0].shape[0]
+    args, off = [], 0
+    n_leaf = 4 * levels[0][0].shape[1] if closed[0] else 0
+    off = n_leaf
+    for l in range(4):
+        if l < len(levels) and closed[l]:
+            cand, sel = levels[l]
+            args += [cand, sel, gpos[l], cand.shape[1], off]
+            off += cand.shape[1]
+        else:
+            args += [levels[0][0], levels[0][1], gpos[0], 0, off]
+    cap = off + always.numel()
+    out = torch.empty(num_kv, cap, dtype=torch.int32, device=always.device)
+    block = 1024
+    _key_list_kernel[(num_kv, triton.cdiv(cap, block))](
+        out, cap, leaf_pos, n_leaf, always, always.numel(), off, *args,
+        COARSE=coarse, BLOCK=block)
+    return out
+
+
 def beam_level(q, K, beta, gpos, cand, forced, k, scaling, union=True):
     """One level for all KV groups. q [num_kv, HPG, D], K [num_kv, T, D] (contiguous),
     beta [num_kv, T] float32, gpos [G] int32, cand [num_kv, C] int32 (ascending node ids,
