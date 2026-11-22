@@ -4,11 +4,11 @@ selection for one decode query, all KV groups at once. Triton.
 Per KV group g and candidate slot c (candidates are node ids in ascending order, -1 for an
 empty slot), `beam_scores` computes s[h, c] = scaling * q[g, h] . K[g, gpos[cand]] + beta;
 forced and empty slots get -inf, so only free candidates compete. `beam_pick` then keeps
-k free candidates by rank-select, without sorting: each (score, slot) pair is packed into
-an order-preserving 64-bit key (higher score first, equal scores to the lower slot, which
-is the lower node id), and the k-th largest key is found bit by bit from the top, one
-count per bit. "union" picks per head and ORs the heads; "sumexp" ranks the group's
-summed exp-scores (RecSA). Scores go through a scratch buffer [num_kv, HPG_P, C].
+k free candidates by rank-select, without sorting: higher score first, equal scores to
+the lower slot (the lower node id). The k-th largest score is found bit by bit from the
+top of its order-preserving 32-bit form, one count per bit, and a prefix sum settles the
+ties at it. "union" picks per head (a program each) and ORs the heads; "sumexp" ranks the
+group's summed exp-scores (RecSA). Scores go through a scratch buffer [num_kv, HPG_P, C].
 """
 
 import torch
@@ -49,14 +49,50 @@ def _ordered(x):
 
 
 @triton.jit
-def _kth(keys, k: tl.constexpr):
-    """Largest t with count(keys >= t) >= k, keys non-negative int64 < 2^62 (bit by bit)."""
+def _topk(x, ok, k):
+    """Top k of x among ok (all of them when fewer), higher x first and equal x to the
+    lower index: the same set as ranking the keys (ordered(x) << 20) | slot. 32 counting
+    passes find the k-th largest ordered value; one prefix sum settles the ties at it."""
+    o = tl.where(ok, _ordered(x), 0)
     t = tl.zeros([], dtype=tl.int64)
-    for b in tl.static_range(61, -1, -1):
+    for b in tl.static_range(31, -1, -1):
         cand = t | (1 << b)
-        cnt = tl.sum((keys >= cand).to(tl.int32), axis=0)
+        cnt = tl.sum((ok & (o >= cand)).to(tl.int32), axis=0)
         t = tl.where(cnt >= k, cand, t)
-    return t
+    gt = ok & (o > t)
+    eq = ok & (o == t)
+    need = k - tl.sum(gt.to(tl.int32), axis=0)
+    return gt | (eq & (tl.cumsum(eq.to(tl.int32), axis=0) <= need))
+
+
+@triton.jit
+def _pick_head_kernel(s_ptr, out_ptr, k, HPG_P: tl.constexpr, C: tl.constexpr):
+    """"union": one program per (KV group, head), ORed into out (int32, zeroed)."""
+    g = tl.program_id(0)
+    h = tl.program_id(1)
+    cs = tl.arange(0, C)
+    s = tl.load(s_ptr + (g * HPG_P + h) * C + cs)
+    picked = _topk(s, s > float("-inf"), k)
+    tl.atomic_or(out_ptr + g * C + cs, picked.to(tl.int32), mask=picked)
+
+
+@triton.jit
+def _pick_sumexp_kernel(s_ptr, out_ptr, k, HPG: tl.constexpr, HPG_P: tl.constexpr,
+                        C: tl.constexpr):
+    """"sumexp": the group's summed exp-scores, one program per KV group."""
+    g = tl.program_id(0)
+    cs = tl.arange(0, C)
+    mx = tl.full([], float("-inf"), tl.float32)
+    for h in tl.static_range(HPG):
+        mx = tl.maximum(mx, tl.max(tl.load(s_ptr + (g * HPG_P + h) * C + cs), axis=0))
+    imp = tl.zeros([C], dtype=tl.float32)
+    ok = tl.zeros([C], dtype=tl.int1)
+    for h in tl.static_range(HPG):
+        s = tl.load(s_ptr + (g * HPG_P + h) * C + cs)
+        okh = s > float("-inf")
+        imp += tl.where(okh, tl.exp(s - mx), 0.0)
+        ok = ok | okh
+    tl.store(out_ptr + g * C + cs, _topk(imp, ok, k).to(tl.int32))
 
 
 @triton.jit(do_not_specialize=["G", "open_parent", "lo"])  # change every step: no recompiles
@@ -95,37 +131,6 @@ def children(cand_up, sel_up, G: int, open_parent: int, lo: int, C: int):
     return cand, forced
 
 
-@triton.jit
-def _pick_kernel(s_ptr, out_ptr, k,
-                 HPG: tl.constexpr, HPG_P: tl.constexpr, C: tl.constexpr, UNION: tl.constexpr):
-    g = tl.program_id(0)
-    cs = tl.arange(0, C)
-    slot = (C - 1 - cs).to(tl.int64)                 # lower slot wins ties
-    picked = tl.zeros([C], dtype=tl.int1)
-    if UNION:
-        for h in tl.static_range(HPG):
-            s = tl.load(s_ptr + (g * HPG_P + h) * C + cs)
-            ok = s > float("-inf")
-            keys = tl.where(ok, (_ordered(s) << 20) | slot, 0)
-            t = _kth(keys, k)
-            picked = picked | (ok & (keys >= t))  # t = 0 when fewer than k: all of them
-    else:
-        mx = tl.full([], float("-inf"), tl.float32)
-        for h in tl.static_range(HPG):
-            mx = tl.maximum(mx, tl.max(tl.load(s_ptr + (g * HPG_P + h) * C + cs), axis=0))
-        imp = tl.zeros([C], dtype=tl.float32)
-        ok = tl.zeros([C], dtype=tl.int1)
-        for h in tl.static_range(HPG):
-            s = tl.load(s_ptr + (g * HPG_P + h) * C + cs)
-            okh = s > float("-inf")
-            imp += tl.where(okh, tl.exp(s - mx), 0.0)
-            ok = ok | okh
-        keys = tl.where(ok, (_ordered(imp) << 20) | slot, 0)
-        t = _kth(keys, k)
-        picked = ok & (keys >= t)
-    tl.store(out_ptr + g * C + cs, picked.to(tl.int8))
-
-
 def beam_level(q, K, beta, gpos, cand, forced, k, scaling, union=True):
     """One level for all KV groups. q [num_kv, HPG, D], K [num_kv, T, D] (contiguous),
     beta [num_kv, T] float32, gpos [G] int32, cand [num_kv, C] int32 (ascending node ids,
@@ -141,7 +146,9 @@ def beam_level(q, K, beta, gpos, cand, forced, k, scaling, union=True):
     _scores_kernel[(num_kv, C // block_c)](
         q.contiguous(), K, beta, gpos, cand, forced, scores, K.shape[1], scaling,
         HPG=hpg, HPG_P=hpg_p, D=D, C=C, BLOCK_C=block_c)
-    out = torch.empty(num_kv, C, dtype=torch.int8, device=q.device)
-    _pick_kernel[(num_kv,)](scores, out, k, HPG=hpg, HPG_P=hpg_p, C=C, UNION=union,
-                            num_warps=8)
+    out = torch.zeros(num_kv, C, dtype=torch.int32, device=q.device)
+    if union:  # one program per head: the old single program per group took 0.24 ms
+        _pick_head_kernel[(num_kv, hpg)](scores, out, k, HPG_P=hpg_p, C=C, num_warps=8)
+    else:
+        _pick_sumexp_kernel[(num_kv,)](scores, out, k, HPG=hpg, HPG_P=hpg_p, C=C, num_warps=8)
     return out.bool(), scores
