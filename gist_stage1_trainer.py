@@ -223,12 +223,15 @@ def row_inputs(r, args, seq_len):
 def batches(ds, seq_len, seed, args):
     """Endless micro-batches of rows truncated to seq_len (rows shorter are skipped)."""
     g = torch.Generator().manual_seed(seed)
+    # the length column once: reading whole rows to skip them took an hour at 32K (cpt_train)
+    keep = torch.tensor(ds["length"]) >= seq_len
+    if not keep.any():
+        raise ValueError(f"no row of at least {seq_len} tokens")
     while True:
         for i in torch.randperm(len(ds), generator=g).tolist():
-            r = ds[i]
-            if r["length"] < seq_len:
+            if not keep[i]:
                 continue
-            ids, labels, seg = row_inputs(r, args, seq_len)
+            ids, labels, seg = row_inputs(ds[i], args, seq_len)
             yield torch.tensor([ids]), torch.tensor([labels]), seg
 
 
