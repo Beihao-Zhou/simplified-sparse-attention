@@ -75,6 +75,8 @@ def main():
     ap.add_argument("--k", type=int, nargs="+", default=[16])
     ap.add_argument("--merge", default="union")
     ap.add_argument("--coarse", action="store_true")
+    ap.add_argument("--oracle", action="store_true",
+                    help="score nodes by true attention mass instead of summaries (#31)")
     ap.add_argument("--modes", nargs="+", default=["hier", "decode", "all"])
     ap.add_argument("--out", required=True)
     ap.add_argument("--agent", help="experiments/agent_data.py output: the KL rows are held-out "
@@ -83,7 +85,8 @@ def main():
     ap.add_argument("--window_turns", type=int, default=0)
     args = ap.parse_args()
     torch.backends.cuda.matmul.allow_tf32 = False
-    cfg = gist_beam.BeamConfig(k=tuple(args.k), merge=args.merge, coarse=args.coarse)
+    cfg = gist_beam.BeamConfig(k=tuple(args.k), merge=args.merge, coarse=args.coarse,
+                               oracle=args.oracle)
     teacher = None
     done = set()
     if os.path.exists(args.out):  # a rerun after preemption keeps what is there
@@ -152,7 +155,7 @@ def main():
                 pred = teacher.lm_head(hs).argmax(-1).tolist()
                 hits["front" if depth < 0.5 else "back"].append(float(pred == ans))
             rec = {"ckpt": ck, "mode": mode, "k": args.k, "merge": args.merge, "coarse": args.coarse,
-                   "len": args.len, "tail": args.tail, "kl": sum(kls) / len(kls) if kls else 0.0,
+                   "oracle": args.oracle, "len": args.len, "tail": args.tail, "kl": sum(kls) / len(kls) if kls else 0.0,
                    "passkey_front": sum(hits["front"]) / len(hits["front"]),
                    "passkey_back": sum(hits["back"]) / len(hits["back"]), "n_kl": len(kls),
                    "n_passkey": len(ctxs)}

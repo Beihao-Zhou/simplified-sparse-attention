@@ -179,7 +179,8 @@ def select_attention(flex, q_in, k_att, v_att, gqa, score_mod, query, key, value
     o_x = torch.zeros_like(o_s, dtype=torch.float32)
     lse_x = torch.full_like(lse_s, float("-inf"), dtype=torch.float32)
     import os
-    triton_path = query.is_cuda and os.environ.get("GIST_SEL_REF", "0") != "1"
+    # the oracle (#31) scores by true attention mass: the PyTorch reference only
+    triton_path = query.is_cuda and os.environ.get("GIST_SEL_REF", "0") != "1" and not cfg.oracle
     for b in range(B):
         rows_all = torch.nonzero(sel_rows[b]).flatten()
         if rows_all.numel() == 0:

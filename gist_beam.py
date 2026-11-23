@@ -39,6 +39,7 @@ class BeamConfig:
     merge: str = "union"        # "union" | "sumexp"
     coarse: bool = False        # unselected candidates stay as coarse terms (exact partition)
     fanout: int = 4
+    oracle: bool = False        # score nodes by true attention mass on their raw tokens (#31)
 
     def k_at(self, level: int) -> int:
         return int(self.k[min(level, len(self.k) - 1)])
@@ -162,18 +163,45 @@ def select(tree: Tree, q: torch.Tensor, k_keys: torch.Tensor, beta: Optional[tor
     L = tree.num_levels
     sel: List[Optional[torch.Tensor]] = [None] * L
     cand: List[Optional[torch.Tensor]] = [None] * L
+    mass = oracle_mass(tree, q, k_keys, rows, scaling, cfg.fanout) if cfg.oracle else None
     up = None
     for l in range(L - 1, -1, -1):
         c = _candidates(tree, rows, l, up, cfg.fanout)
         f = _forced(tree, rows, l, lo, cfg.fanout) & c
-        gk = k_keys[tree.gpos[l]]                                 # [G, d]
-        s = torch.einsum("hnd,gd->nhg", q.float(), gk.float()) * scaling
-        if beta is not None:
-            s = s + beta[tree.gpos[l]].float()[None, None, :]
+        if mass is not None:                                      # log mass: union / sumexp
+            s = mass[l].clamp(min=1e-30).log()                    # rank as for the logits
+        else:
+            gk = k_keys[tree.gpos[l]]                             # [G, d]
+            s = torch.einsum("hnd,gd->nhg", q.float(), gk.float()) * scaling
+            if beta is not None:
+                s = s + beta[tree.gpos[l]].float()[None, None, :]
         sel[l] = f | _pick(s, c & ~f, cfg.k_at(l), cfg.merge)
         cand[l] = c
         up = sel[l]
     return Selection(rows, sel, cand)
+
+
+def oracle_mass(tree: Tree, q: torch.Tensor, k_keys: torch.Tensor, rows: torch.Tensor,
+                scaling: float, fanout: int = 4) -> List[torch.Tensor]:
+    """Per level: [n, h, G_l], the attention mass that full causal attention over the raw
+    tokens (summaries excluded) puts on each node's compressible raw tokens: the selection
+    a perfect router would make with the same q and k (#31). q [h, n, d], k_keys [T, d]."""
+    T = tree.level.numel()
+    pos = torch.arange(T, device=rows.device)
+    raw = tree.level < 0
+    logit = torch.einsum("hnd,td->nht", q.float(), k_keys.float()) * scaling
+    ok = raw[None, :] & (pos[None, :] <= rows[:, None])                       # [n, T]
+    p = logit.masked_fill(~ok[:, None], float("-inf")).softmax(-1)           # [n, h, T]
+    comp = torch.nonzero(tree.compressible).flatten()
+    leaf, pc = tree.leaf[comp], p[..., comp]
+    out = []
+    for l in range(tree.num_levels):
+        G = tree.gpos[l].numel()
+        node = leaf // fanout ** l
+        keep = node < G                                     # open nodes have no summary yet
+        m = torch.zeros(*p.shape[:2], G, device=p.device, dtype=p.dtype)
+        out.append(m.index_add_(2, node[keep], pc[..., keep]))
+    return out
 
 
 def from_ids(tree: Tree, rows: torch.Tensor, ids: List[List[torch.Tensor]], fanout: int = 4):
