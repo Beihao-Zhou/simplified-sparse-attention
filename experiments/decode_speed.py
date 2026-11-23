@@ -40,7 +40,12 @@ def main():
         for graph in ("1", "0"):
             os.environ["GIST_DECODE_GRAPH"] = graph
             s = GistSession(model)
+            torch.cuda.reset_peak_memory_stats()
+            torch.cuda.synchronize()
+            t_pre = time.perf_counter()
             s.append(row["input_ids"][:L], row["pinned"][:L], row["turn"][:L])
+            torch.cuda.synchronize()
+            t_pre = time.perf_counter() - t_pre
             y = int(model.lm_head(s.last_hidden).argmax())
             for _ in range(8):  # warm-up (graph capture, compiles)
                 y = int(s.step(y).argmax())
@@ -53,7 +58,10 @@ def main():
             dt = time.perf_counter() - t0
             print(json.dumps({"raw": L, "tokens": n0, "graph": graph == "1",
                               "ms_per_token": round(1000 * dt / args.steps, 1),
-                              "fed_per_token": round((len(s.ids) - n0) / args.steps, 2)}), flush=True)
+                              "fed_per_token": round((len(s.ids) - n0) / args.steps, 2),
+                              "prefill_s": round(t_pre, 1),
+                              "peak_gb": round(torch.cuda.max_memory_allocated() / 2**30, 2)}),
+                  flush=True)
             del s
             torch.cuda.empty_cache()
 
