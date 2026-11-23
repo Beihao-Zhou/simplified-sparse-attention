@@ -1,0 +1,25 @@
+experiments/diverge_run.sh
+  s_466735a13fa48a::t_658c61884c91bc 1-23
+gist_stage1_trainer.py
+  s_466735a13fa48a::t_a7db10d0e34d92 55-61,391
+  s_466735a13fa48a::t_39fecf95c84813 95
+  s_466735a13fa48a::t_b25948c6380b08 99-102,382-387
+experiments/diverge2_run.sh
+  s_466735a13fa48a::t_be887b980ce19a 1-19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "ff9ac06d39d76b7055476702f6fb825916f4fdb8",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
