@@ -6,7 +6,7 @@
 cd "$(dirname "$0")/.."
 source /data/venv/bin/activate
 export HF_HOME=/data/hf PYTHONPATH="$(pwd)" PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-M=${MODEL:-$HOME/models/Qwen2.5-7B-Instruct-1M}
+M=${MODEL:-/data/models/Qwen2.5-7B-Instruct-1M}
 A=/data/agent_data E=/data/agent_longeval/len262144
 mkdir -p logs runs results
 run() { name=$1; shift
