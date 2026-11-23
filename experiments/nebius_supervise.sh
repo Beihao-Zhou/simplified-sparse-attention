@@ -9,12 +9,16 @@ HOST_USER=${HOST_USER:-ssa}
 REPO=${REPO:-/data/ssa}
 : "${VM_ID:?}" "${QUEUE:?}" "${LOG:?}" "${DONE_PATTERN:?}"
 while true; do
-  state=$($N compute instance get --id "$VM_ID" --format jsonpath='{.status.state}' 2>/dev/null)
+  # timeout + no stdin: an expired login otherwise waits for a browser forever (it hid a
+  # preemption for 9 hours); say so in the log instead
+  state=$(timeout 60 $N compute instance get --id "$VM_ID" --format jsonpath='{.status.state}' \
+    2>/dev/null </dev/null)
+  [ -z "$state" ] && echo "$(date +%T) nebius CLI gave no state (login expired? run it once by hand)"
   if [ "$state" = STOPPED ]; then
     echo "$(date +%T) VM stopped (preempted?), starting"
-    $N compute instance start --id "$VM_ID" >/dev/null 2>&1 || { sleep 120; continue; }
+    timeout 600 $N compute instance start --id "$VM_ID" >/dev/null 2>&1 </dev/null || { sleep 120; continue; }
   elif [ "$state" = RUNNING ]; then
-    ip=$($N compute instance get --id "$VM_ID" --format json | python3 -c \
+    ip=$(timeout 60 $N compute instance get --id "$VM_ID" --format json </dev/null | python3 -c \
       "import sys,json;print(json.load(sys.stdin)['status']['network_interfaces'][0]['public_ip_address']['address'].split('/')[0])")
     # keepalive + a hard timeout: an ssh into a VM that gets preempted mid-command otherwise
     # hangs forever (it once hid a preemption for 2 hours)
