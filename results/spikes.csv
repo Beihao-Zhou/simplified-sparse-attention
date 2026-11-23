@@ -134,3 +134,12 @@ F31,B_learned,0,beam_mass_ratio_8k,0.869,ff9ac06,2026-11-23
 F31,B_fit1,0,beam_mass_ratio_8k,0.969,ff9ac06,2026-11-23
 F31,B_fit4,0,beam_mass_ratio_8k,0.978,ff9ac06,2026-11-23
 F31,B_nope1,0,beam_mass_ratio_8k,0.893,ff9ac06,2026-11-23
+F31,B_learned_retr_layers,0,flat0_mass_ratio_8k,0.788,dafab68,2026-11-23
+F31,B_fit1_retr_layers,0,flat0_mass_ratio_8k,0.906,dafab68,2026-11-23
+F31,B_fit4_retr_layers,0,flat0_mass_ratio_8k,0.972,dafab68,2026-11-23
+F31,B_learned_retr_layers,0,key_hit_8k,0.64,dafab68,2026-11-23
+F31,B_fit1_retr_layers,0,key_hit_8k,0.70,dafab68,2026-11-23
+F31,B_fit4_retr_layers,0,key_hit_8k,0.88,dafab68,2026-11-23
+F31,B_oracle_retr_layers,0,key_hit_8k,0.96,dafab68,2026-11-23
+F31,B_learned_all_layers,0,key_hit_8k,0.358,dafab68,2026-11-23
+F31,B_oracle_all_layers,0,key_hit_8k,0.525,dafab68,2026-11-23
