@@ -1,0 +1,29 @@
+experiments/select_gate.py
+  s_466735a13fa48a::t_e323b94fbb3836 78-79,88-89,158
+experiments/y1_run.sh
+  s_466735a13fa48a::t_035c6da84ec1ba 1-12
+gist_select_train.py
+  s_466735a13fa48a::t_54d61dcefc7af2 182-183
+tests/test_beam_oracle.py
+  s_466735a13fa48a::t_e1930f0d65c612 1-70
+gist_beam.py
+  s_466735a13fa48a::t_9f934515e48533 184-206
+  s_466735a13fa48a::t_e41e5d471fc327 42
+  s_466735a13fa48a::t_9352436ffa00ec 166,171-177
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "8fe4338d7d4250bab23d62c5ca672b8c677ba78e",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
