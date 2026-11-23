@@ -1,0 +1,24 @@
+tests/test_select_rows.py
+  s_466735a13fa48a::t_21d5821267aad3 1-58
+gist_select_train.py
+  s_466735a13fa48a::t_cf41530276e403 187,189-191
+kernels/select_rows.py
+  s_466735a13fa48a::t_cbb189fb5e19ea 1-151,155-173
+  s_466735a13fa48a::t_acbbac938936f2 152-154
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "404ba629baae2d578bfdf2e12ca7bf22d810bc7d",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
