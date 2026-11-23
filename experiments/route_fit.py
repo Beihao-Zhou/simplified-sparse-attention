@@ -109,7 +109,7 @@ def run_group(tree, q, k, b, rows, test, n_ret, key_leaf, cfg, scaling, cos, sin
     """Models `names` for one KV group: q [h, n, d] at rows [n], k [T, d], b [T] or None. The
     last n_ret rows (test rows) are the retrieval rows: the question and the answer."""
     L = tree.num_levels
-    lo = gb._forced_leaf_lo(tree, rows, 1, 0, 0)
+    lo = gb._forced_leaf_lo(tree, rows, 1, Global_data.raw_window, 0)
     free = [gb._closed(tree, rows, l) & ~gb._forced(tree, rows, l, lo, cfg.fanout) for l in range(L)]
     mass = gb.oracle_mass(tree, q, k, rows, scaling, cfg.fanout)
     b = torch.zeros(k.shape[0], device=k.device) if b is None else b
@@ -139,6 +139,7 @@ def run_group(tree, q, k, b, rows, test, n_ret, key_leaf, cfg, scaling, cos, sin
                "flat_fit": [flat_ratio(sc[l][fitr], mass[l][fitr], free[l][fitr], args.k)
                             for l in range(L)]}
         s_sel = gb.select(tree, q[:, test], k, None, rows[test], cfg, scaling,
+                          raw_window=Global_data.raw_window,
                           scores=[x[test] for x in sc])
         out[name] = (rec, s_sel)
     o_sel = out["oracle"][1]
@@ -171,11 +172,13 @@ def main():
     ap.add_argument("--k", type=int, default=16)
     ap.add_argument("--steps", type=int, default=300)
     ap.add_argument("--lr", type=float, default=0.05)
+    ap.add_argument("--raw_window", type=int, default=0,
+                    help="forced recent raw tokens, as select_gate's (plain text: no turns)")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
     torch.backends.cuda.matmul.allow_tf32 = False
     tok, model, L = dr.load(args.ckpt, args.model)
-    Global_data.raw_window = Global_data.window_turns = 0
+    Global_data.raw_window, Global_data.window_turns = args.raw_window, 0
     gid = set(Global_data.gist_token_id)
     docs = [[t for t in r["input_ids"] if t not in gid]
             for r in datasets.load_from_disk(os.path.expanduser(args.docs))]
