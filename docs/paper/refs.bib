@@ -1,0 +1,216 @@
+% References for docs/paper/draft.tex.
+% Author lists and titles verified against arXiv abstract pages, the DeepSeek-V3.2-Exp repository
+% and the PyTorch blog (2026-11-23). The trajectory data is nebius/SWE-rebench-openhands-trajectories
+% on Hugging Face, cited through the SWE-rebench paper.
+
+@misc{recsa2026,
+  title         = {Recursive Sparse Attention: Million-Token Length Extrapolation at Logarithmic Cost},
+  author        = {Ruitian Wang and Xinyu Yang and Minshen Zhang and Hao Zhang},
+  year          = {2026},
+  eprint        = {2611.07232},
+  note          = {arXiv:2611.07232},
+  archivePrefix = {arXiv}
+}
+
+@misc{mao2026ssa,
+  title         = {Simplified Sparse Attention via Gist Tokens},
+  author        = {Yuzhen Mao and Michael Y. Li and Emily B. Fox},
+  year          = {2026},
+  eprint        = {2604.20920},
+  note          = {arXiv:2604.20920},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.LG}
+}
+
+@inproceedings{mu2023gist,
+  title     = {Learning to Compress Prompts with Gist Tokens},
+  author    = {Jesse Mu and Xiang Lisa Li and Noah Goodman},
+  booktitle = {Advances in Neural Information Processing Systems},
+  year      = {2023}
+}
+
+@inproceedings{chevalier2023autocompressors,
+  title     = {Adapting Language Models to Compress Contexts},
+  author    = {Alexis Chevalier and Alexander Wettig and Anirudh Ajith and Danqi Chen},
+  booktitle = {Proceedings of the Conference on Empirical Methods in Natural Language Processing},
+  year      = {2023}
+}
+
+@inproceedings{mohtashami2023landmark,
+  title     = {Random-Access Infinite Context Length for Transformers},
+  author    = {Amirkeivan Mohtashami and Martin Jaggi},
+  booktitle = {Advances in Neural Information Processing Systems},
+  year      = {2023}
+}
+
+@inproceedings{tang2024quest,
+  title     = {{Quest}: Query-Aware Sparsity for Efficient Long-Context {LLM} Inference},
+  author    = {Jiaming Tang and Yilong Zhao and Kan Zhu and Guangxuan Xiao and Baris Kasikci and Song Han},
+  booktitle = {Proceedings of the International Conference on Machine Learning},
+  year      = {2024}
+}
+
+@misc{lu2025moba,
+  title         = {{MoBA}: Mixture of Block Attention for Long-Context {LLMs}},
+  author        = {Enzhe Lu and Zhejun Jiang and Jingyuan Liu and Yulun Du and Tao Jiang and Chao Hong and Shaowei Liu and Weiran He and Enming Yuan and Yuzhi Wang and Zhiqi Huang and Huan Yuan and Suting Xu and Xinran Xu and Guokun Lai and Yanru Chen and Huabin Zheng and Junjie Yan and Jianlin Su and Yuxin Wu and Neo Y. Zhang and Zhilin Yang and Xinyu Zhou and Mingxing Zhang and Jiezhong Qiu},
+  year          = {2025},
+  eprint        = {2502.13189},
+  note          = {arXiv:2502.13189},
+  archivePrefix = {arXiv}
+}
+
+@inproceedings{yuan2025nsa,
+  title     = {Native Sparse Attention: Hardware-Aligned and Natively Trainable Sparse Attention},
+  author    = {Jingyang Yuan and Huazuo Gao and Damai Dai and Junyu Luo and Liang Zhao and Zhengyan Zhang and Zhenda Xie and Y. X. Wei and Lean Wang and Zhiping Xiao and Yuqing Wang and Chong Ruan and Ming Zhang and Wenfeng Liang and Wangding Zeng},
+  booktitle = {Proceedings of the Annual Meeting of the Association for Computational Linguistics},
+  year      = {2025}
+}
+
+@misc{deepseek2025dsa,
+  title  = {{DeepSeek-V3.2-Exp}: Boosting Long-Context Efficiency with {DeepSeek} Sparse Attention},
+  author = {{DeepSeek-AI}},
+  year   = {2025},
+  howpublished = {\url{https://github.com/deepseek-ai/DeepSeek-V3.2-Exp/blob/main/DeepSeek_V3_2.pdf}}
+}
+
+@inproceedings{xiao2024infllm,
+  title     = {{InfLLM}: Training-Free Long-Context Extrapolation for {LLMs} with an Efficient Context Memory},
+  author    = {Chaojun Xiao and Pengle Zhang and Xu Han and Guangxuan Xiao and Yankai Lin and Zhengyan Zhang and Zhiyuan Liu and Maosong Sun},
+  booktitle = {Advances in Neural Information Processing Systems},
+  year      = {2024}
+}
+
+@inproceedings{xiao2024sink,
+  title     = {Efficient Streaming Language Models with Attention Sinks},
+  author    = {Guangxuan Xiao and Yuandong Tian and Beidi Chen and Song Han and Mike Lewis},
+  booktitle = {International Conference on Learning Representations},
+  year      = {2024}
+}
+
+@inproceedings{agarwal2024gkd,
+  title     = {On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes},
+  author    = {Rishabh Agarwal and Nino Vieillard and Yongchao Zhou and Piotr Stanczyk and Sabela Ramos and Matthieu Geist and Olivier Bachem},
+  booktitle = {International Conference on Learning Representations},
+  year      = {2024}
+}
+
+@inproceedings{gu2024minillm,
+  title     = {{MiniLLM}: Knowledge Distillation of Large Language Models},
+  author    = {Yuxian Gu and Li Dong and Furu Wei and Minlie Huang},
+  booktitle = {International Conference on Learning Representations},
+  year      = {2024}
+}
+
+@misc{dong2024flex,
+  title         = {Flex Attention: A Programming Model for Generating Optimized Attention Kernels},
+  author        = {Juechu Dong and Boyuan Feng and Driss Guessous and Yanbo Liang and Horace He},
+  year          = {2024},
+  eprint        = {2412.05496},
+  note          = {arXiv:2412.05496},
+  archivePrefix = {arXiv}
+}
+
+@inproceedings{dao2022flashattention,
+  title     = {{FlashAttention}: Fast and Memory-Efficient Exact Attention with {IO}-Awareness},
+  author    = {Tri Dao and Daniel Y. Fu and Stefano Ermon and Atri Rudra and Christopher R{\'e}},
+  booktitle = {Advances in Neural Information Processing Systems},
+  year      = {2022}
+}
+
+@inproceedings{dao2024flashattention2,
+  title     = {{FlashAttention-2}: Faster Attention with Better Parallelism and Work Partitioning},
+  author    = {Tri Dao},
+  booktitle = {International Conference on Learning Representations},
+  year      = {2024}
+}
+
+@misc{dao2023flashdecoding,
+  title        = {Flash-Decoding for Long-Context Inference},
+  author       = {Tri Dao and Daniel Haziza and Francisco Massa and Grigory Sizov},
+  year         = {2023},
+  howpublished = {PyTorch blog, \url{https://pytorch.org/blog/flash-decoding/}}
+}
+
+@inproceedings{tillet2019triton,
+  title     = {Triton: An Intermediate Language and Compiler for Tiled Neural Network Computations},
+  author    = {Philippe Tillet and H. T. Kung and David Cox},
+  booktitle = {Proceedings of the ACM SIGPLAN International Workshop on Machine Learning and Programming Languages},
+  year      = {2019}
+}
+
+@inproceedings{peng2024yarn,
+  title     = {{YaRN}: Efficient Context Window Extension of Large Language Models},
+  author    = {Bowen Peng and Jeffrey Quesnelle and Honglu Fan and Enrico Shippole},
+  booktitle = {International Conference on Learning Representations},
+  year      = {2024}
+}
+
+@inproceedings{an2024dca,
+  title     = {Training-Free Long-Context Scaling of Large Language Models},
+  author    = {Chenxin An and Fei Huang and Jun Zhang and Shansan Gong and Xipeng Qiu and Chang Zhou and Lingpeng Kong},
+  booktitle = {Proceedings of the International Conference on Machine Learning},
+  year      = {2024}
+}
+
+@misc{yang2025qwen1m,
+  title         = {{Qwen2.5-1M} Technical Report},
+  author        = {An Yang and Bowen Yu and Chengyuan Li and Dayiheng Liu and Fei Huang and Haoyan Huang and Jiandong Jiang and Jianhong Tu and Jianwei Zhang and Jingren Zhou and Junyang Lin and Kai Dang and Kexin Yang and Le Yu and Mei Li and Minmin Sun and Qin Zhu and Rui Men and Tao He and Weijia Xu and Wenbiao Yin and Wenyuan Yu and Xiafei Qiu and Xingzhang Ren and Xinlong Yang and Yong Li and Zhiying Xu and Zipeng Zhang},
+  year          = {2025},
+  eprint        = {2501.15383},
+  note          = {arXiv:2501.15383},
+  archivePrefix = {arXiv}
+}
+
+@misc{qwen2025qwen25,
+  title         = {{Qwen2.5} Technical Report},
+  author        = {{Qwen Team}},
+  year          = {2025},
+  eprint        = {2412.15115},
+  note          = {arXiv:2412.15115},
+  archivePrefix = {arXiv}
+}
+
+@inproceedings{hu2022lora,
+  title     = {{LoRA}: Low-Rank Adaptation of Large Language Models},
+  author    = {Edward J. Hu and Yelong Shen and Phillip Wallis and Zeyuan Allen-Zhu and Yuanzhi Li and Shean Wang and Lu Wang and Weizhu Chen},
+  booktitle = {International Conference on Learning Representations},
+  year      = {2022}
+}
+
+@article{su2024roformer,
+  title   = {{RoFormer}: Enhanced Transformer with Rotary Position Embedding},
+  author  = {Jianlin Su and Murtadha Ahmed and Yu Lu and Shengfeng Pan and Wen Bo and Yunfeng Liu},
+  journal = {Neurocomputing},
+  volume  = {568},
+  year    = {2024}
+}
+
+@inproceedings{ainslie2023gqa,
+  title     = {{GQA}: Training Generalized Multi-Query Transformer Models from Multi-Head Checkpoints},
+  author    = {Joshua Ainslie and James Lee-Thorp and Michiel de Jong and Yury Zemlyanskiy and Federico Lebr{\'o}n and Sumit Sanghai},
+  booktitle = {Proceedings of the Conference on Empirical Methods in Natural Language Processing},
+  year      = {2023}
+}
+
+@inproceedings{hsieh2024ruler,
+  title     = {{RULER}: What's the Real Context Size of Your Long-Context Language Models?},
+  author    = {Cheng-Ping Hsieh and Simeng Sun and Samuel Kriman and Shantanu Acharya and Dima Rekesh and Fei Jia and Yang Zhang and Boris Ginsburg},
+  booktitle = {Conference on Language Modeling},
+  year      = {2024}
+}
+
+@inproceedings{wang2025openhands,
+  title     = {{OpenHands}: An Open Platform for {AI} Software Developers as Generalist Agents},
+  author    = {Xingyao Wang and Boxuan Li and Yufan Song and Frank F. Xu and Xiangru Tang and Mingchen Zhuge and Jiayi Pan and Yueqi Song and Bowen Li and Jaskirat Singh and Hoang H. Tran and Fuqiang Li and Ren Ma and Mingzhang Zheng and Bill Qian and Yanjun Shao and Niklas Muennighoff and Yizhe Zhang and Binyuan Hui and Junyang Lin and Robert Brennan and Hao Peng and Heng Ji and Graham Neubig},
+  booktitle = {International Conference on Learning Representations},
+  year      = {2025}
+}
+
+@misc{badertdinov2025swerebench,
+  title         = {{SWE-rebench}: An Automated Pipeline for Task Collection and Decontaminated Evaluation of Software Engineering Agents},
+  author        = {Ibragim Badertdinov and Alexander Golubev and Maksim Nekrashevich and Anton Shevtsov and Simon Karasik and Andrei Andriushchenko and Maria Trofimova and Daria Litvintseva and Boris Yangel},
+  year          = {2025},
+  eprint        = {2505.20411},
+  note          = {arXiv:2505.20411},
+  archivePrefix = {arXiv}
+}
