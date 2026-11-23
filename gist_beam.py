@@ -157,8 +157,10 @@ def _pick(scores: torch.Tensor, free: torch.Tensor, k: int, merge: str) -> torch
 
 def select(tree: Tree, q: torch.Tensor, k_keys: torch.Tensor, beta: Optional[torch.Tensor],
            rows: torch.Tensor, cfg: BeamConfig, scaling: float, prev_chunks: int = 1,
-           raw_window: int = 0, window_turns: int = 0) -> Selection:
-    """One KV group. q [h, n, d] at positions rows [n], k_keys [T, d], beta [T] or None."""
+           raw_window: int = 0, window_turns: int = 0,
+           scores: Optional[List[torch.Tensor]] = None) -> Selection:
+    """One KV group. q [h, n, d] at positions rows [n], k_keys [T, d], beta [T] or None.
+    scores: per level [n, h, G_l], used in place of the summary scores (route_fit.py)."""
     lo = _forced_leaf_lo(tree, rows, prev_chunks, raw_window, window_turns)
     L = tree.num_levels
     sel: List[Optional[torch.Tensor]] = [None] * L
@@ -168,7 +170,9 @@ def select(tree: Tree, q: torch.Tensor, k_keys: torch.Tensor, beta: Optional[tor
     for l in range(L - 1, -1, -1):
         c = _candidates(tree, rows, l, up, cfg.fanout)
         f = _forced(tree, rows, l, lo, cfg.fanout) & c
-        if mass is not None:                                      # log mass: union / sumexp
+        if scores is not None:
+            s = scores[l]
+        elif mass is not None:                                    # log mass: union / sumexp
             s = mass[l].clamp(min=1e-30).log()                    # rank as for the logits
         else:
             gk = k_keys[tree.gpos[l]]                             # [G, d]
