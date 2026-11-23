@@ -184,18 +184,11 @@ def select_attention(flex, q_in, k_att, v_att, gqa, score_mod, query, key, value
         rows_all = torch.nonzero(sel_rows[b]).flatten()
         if rows_all.numel() == 0:
             continue
-        if triton_path:  # one gather kernel per sequence over all its selecting rows
+        if triton_path:  # selection and gather in one kernel each, over all selecting rows
             from kernels.gather_attn import gather_attention as gather_kernel
-            per = []
-            for g in range(H_kv):
-                hs = slice(g * hpg, (g + 1) * hpg)
-                bg = None if beta is None else beta[b, g].detach()
-                per.append(_cat_lists([
-                    selected_lists(trees[b], los[b], rows_all[i:i + chunk],
-                                   query[b, hs][:, rows_all[i:i + chunk]].detach(),
-                                   key[b, g].detach(), bg, cfg, scaling)
-                    for i in range(0, rows_all.numel(), chunk)]))
-            idx = _cat_lists(per, stack=True)                              # [H_kv, n, cap]
+            from kernels.select_rows import select_lists
+            idx = select_lists(trees[b], los[b], rows_all, query[b].detach(), key[b].detach(),
+                               None if beta is None else beta[b].detach(), cfg, scaling)
             o, lse = gather_kernel(query[b], key[b], value[b],
                                    None if beta is None else beta[b].float(), rows_all,
                                    idx.int(), scaling)
