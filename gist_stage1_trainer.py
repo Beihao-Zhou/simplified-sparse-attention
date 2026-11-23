@@ -76,6 +76,8 @@ def parse_args(argv=None):
     ap.add_argument("--select_k", type=int, nargs="+", default=[16], help="free nodes per level")
     ap.add_argument("--select_merge", choices=["union", "sumexp"], default="union")
     ap.add_argument("--select_coarse", action="store_true")
+    ap.add_argument("--select_impl", choices=["hybrid", "dense"], default="hybrid",
+                    help="hybrid: flex + gather kernels (#29); dense: the [T, T] mask (<= ~32K)")
     ap.add_argument("--per_level", action="store_true", help="one gist LoRA per summary level")
     ap.add_argument(
         "--phase2_at",
@@ -193,7 +195,7 @@ def select_config(args, rows_from=0):
         return None
     return {"cfg": gist_beam.BeamConfig(k=tuple(args.select_k), merge=args.select_merge,
                                         coarse=args.select_coarse),
-            "rows_from": rows_from}
+            "rows_from": rows_from, "impl": getattr(args, "select_impl", "hybrid")}
 
 
 def row_ids(r, args):
