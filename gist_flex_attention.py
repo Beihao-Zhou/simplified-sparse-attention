@@ -332,10 +332,12 @@ def _stage1_routing(module, query, key, beta, input_ids, exclude, rows, scaling,
         perm = torch.randperm(cand.numel(), device=cand.device)[: st["route_rows"]]
         pick = cand[perm].sort().values
         bt = None if beta is None else beta[b].repeat_interleave(hpg, 0)
-        st["losses"].setdefault("route", []).append(routing_kl(
+        loss = routing_kl(
             query[b][:, pick], pick, k[b], input_ids[b], Global_data.gist_token_id, scaling, bt,
             exclude=None if exclude is None else exclude[b],
-            scope=st.get("route_scope", "level"), oracle_k=st.get("route_oracle_k", 256)))
+            scope=st.get("route_scope", "level"), oracle_k=st.get("route_oracle_k", 256))
+        if _first(st, (module.layer_idx, "route", b)):
+            st["losses"].setdefault("route", []).append(loss)
 
 
 def fold_beta(query: torch.Tensor, key: torch.Tensor, beta: torch.Tensor, scaling: float):
@@ -379,9 +381,22 @@ def _stage1_attention(module, attend, hier_mask, teacher_masks, rows, st):
     B, T = rows.shape
     proj = {n: module.o_proj(o.reshape(B, T, -1)) for n, o in outs.items()}
     for s_name, t_name in st["pairs"]:
-        st["losses"].setdefault(f"{s_name}|{t_name}", []).append(
-            _rel_mse(proj[s_name], proj[t_name].detach(), rows))
+        loss = _rel_mse(proj[s_name], proj[t_name].detach(), rows)
+        if _first(st, (module.layer_idx, s_name, t_name)):
+            st["losses"].setdefault(f"{s_name}|{t_name}", []).append(loss)
     return outs[st["down"]]
+
+
+def _first(st, key) -> bool:
+    """Whether a layer's loss is seen for the first time in this forward. Gradient
+    checkpointing reruns the layer during backward: the rerun must repeat the ops (saved
+    tensors are matched in order) but not keep the loss again, whose graph would live
+    until the next forward (as the OPSD routing loss did, #21)."""
+    seen = st.setdefault("seen", set())
+    if key in seen:
+        return False
+    seen.add(key)
+    return True
 
 
 AttentionInterface.register(GIST_FLEX, gist_flex_attention_forward)

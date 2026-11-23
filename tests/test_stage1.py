@@ -345,3 +345,28 @@ def test_select_hybrid_equals_the_dense_mask(cfg, coarse, k, agent):
                         / grads["dense"][n].abs().max().clamp_min(1e-30)) for n in grads["dense"]}
         bad = {n: r for n, r in rel.items() if r > 1e-4}  # fp32 rounding: <= 5e-6 seen
         assert not bad, (impl, max(rel.values()), bad)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="flex backward needs CUDA")
+def test_checkpoint_rerun_keeps_one_loss_per_layer(cfg):
+    """Gradient checkpointing reruns each layer during backward; the rerun must not append
+    its losses again (their graphs stayed alive until the next forward: the memory of a
+    32K stage-1 step)."""
+    from gist_lora import apply_summary_bias, summary_spans
+
+    cfg._attn_implementation = gist_flex_attention.GIST_FLEX
+    Global_data.train_attn = "flex"
+    Global_data.stage1 = {"pairs": [("hier", "raw"), ("g1", "raw")], "down": "hier",
+                          "lambda_ntp": 0.0, "route_rows": 8}
+    torch.manual_seed(0)
+    model = GistQwen2ForCausalLM(cfg).float().train()
+    apply_lora(model, "gist", r=4)
+    apply_summary_bias(model, spans=summary_spans(2))
+    model.cuda().gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+    ids = _ids(n_raw=300).cuda()
+    model(input_ids=ids, attention_mask=torch.ones_like(ids), use_cache=False)
+    losses = Global_data.stage1["losses"]
+    sum(torch.stack(v).sum() for v in losses.values()).backward()
+    L = cfg.num_hidden_layers
+    assert len(losses["hier|raw"]) == L and len(losses["g1|raw"]) == L
+    assert len(losses["route"]) == L - 1  # layer 0 has no routing loss

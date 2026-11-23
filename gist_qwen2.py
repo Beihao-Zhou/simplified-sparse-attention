@@ -1242,6 +1242,7 @@ class GistQwen2Model(Qwen2PreTrainedModel):
                 Global_data.lora_row_level[input_ids == _g] = _lvl
         if Global_data.stage1 is not None:
             Global_data.stage1["losses"] = {}
+            Global_data.stage1["seen"] = set()  # gist_flex_attention._first
 
         if use_cache and past_key_values is None:
             past_key_values = DynamicCache(config=self.config)
