@@ -1,0 +1,21 @@
+experiments/oracle8k_run.sh
+  s_466735a13fa48a::t_283dd6332bea7b 1-12
+experiments/m7b_run.sh
+  s_466735a13fa48a::t_6809e0c1b743da 9-11
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "9df8e40a37769ce5b26edd6969e73e0cb2ef2e8d",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
