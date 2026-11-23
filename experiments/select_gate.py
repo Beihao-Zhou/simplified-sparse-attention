@@ -40,14 +40,17 @@ from gist_utils import Global_data  # noqa: E402
 from src.data.gist_stream import insert_gists_with_map  # noqa: E402
 
 
-def student(model, ids, mode, tail_from, cfg):
-    """Hidden states of the gisted ids [T] under a mode; rows from tail_from select."""
+def student(model, ids, mode, tail_from, cfg, pinned=None, turn=None):
+    """Hidden states of the gisted ids [T] under a mode; rows from tail_from select.
+    pinned / turn [T]: an agent trajectory's segment labels (the gist mask's R6, R7)."""
     down = "hier" if mode == "hier" else "sel"
     rows_from = {"decode": tail_from, "all": 0}.get(mode, 0)
     Global_data.stage1 = {"pairs": [], "down": down, "lambda_ntp": 0.0, "route_rows": 0,
                           "select": {"cfg": cfg, "rows_from": rows_from}}
+    seg = {} if pinned is None else {"gist_pinned": pinned[None], "gist_turn": turn[None]}
     try:
-        return model.model(input_ids=ids[None], attention_mask=torch.ones_like(ids)[None]).last_hidden_state[0]
+        return model.model(input_ids=ids[None], attention_mask=torch.ones_like(ids)[None],
+                           **seg).last_hidden_state[0]
     finally:
         Global_data.stage1 = None
 
@@ -74,6 +77,10 @@ def main():
     ap.add_argument("--coarse", action="store_true")
     ap.add_argument("--modes", nargs="+", default=["hier", "decode", "all"])
     ap.add_argument("--out", required=True)
+    ap.add_argument("--agent", help="experiments/agent_data.py output: the KL rows are held-out "
+                    "trajectories (pinned prefix and turns kept) and their text fills the passkey")
+    ap.add_argument("--raw_window", type=int, default=0)
+    ap.add_argument("--window_turns", type=int, default=0)
     args = ap.parse_args()
     torch.backends.cuda.matmul.allow_tf32 = False
     cfg = gist_beam.BeamConfig(k=tuple(args.k), merge=args.merge, coarse=args.coarse)
@@ -86,21 +93,41 @@ def main():
         tok, model, L = dr.load(ck, args.model)
         if teacher is None:
             teacher = Qwen2ForCausalLM.from_pretrained(args.model, dtype=torch.bfloat16).cuda().eval()
+        Global_data.raw_window, Global_data.window_turns = args.raw_window, args.window_turns
         gid = set(Global_data.gist_token_id)
-        docs = [[t for t in r["input_ids"] if t not in gid]
-                for r in datasets.load_from_disk(os.path.expanduser(args.docs))]
-        long_docs = [d_ for d_ in docs if len(d_) >= args.len][: args.n_kl]
+        if args.agent:
+            from experiments.agent_data import load_split
+            rows = load_split(args.agent, "heldout")
+            longs = [i for i, n in enumerate(rows["length"]) if n >= args.len][: args.n_kl]
+            long_docs = [(rows[i]["input_ids"][: args.len], rows[i]["pinned"][: args.len],
+                          rows[i]["turn"][: args.len]) for i in longs]
+            docs = [rows[i]["input_ids"] for i in range(min(len(rows), 300))]
+        else:
+            docs = [[t for t in r["input_ids"] if t not in gid]
+                    for r in datasets.load_from_disk(os.path.expanduser(args.docs))]
+            long_docs = [d_ for d_ in docs if len(d_) >= args.len][: args.n_kl]
         ctxs = [c for rep in range(args.reps) for c in dr.contexts(tok, docs, args.len, args.depths, seed=rep)]
         modes = args.modes + (["teacher"] if ck == args.ckpts[0] else [])
         for mode in modes:
             if (ck, mode) in done:
                 continue
             kls = []
-            for raw in long_docs if mode != "teacher" else []:
-                raw = raw[: args.len]
-                ids, where = gist(raw)
+            for doc in long_docs if mode != "teacher" else []:
+                pin = trn = None
+                if args.agent:
+                    from src.data.gist_stream import gist_segments
+                    raw = list(doc[0])
+                    g, p, t = gist_segments(raw, doc[1], doc[2], Global_data.gist_token_id, 4, 4,
+                                            sink=Global_data.sink_size)
+                    ids = torch.tensor(g, device="cuda")
+                    where = torch.nonzero(~torch.isin(ids, torch.tensor(Global_data.gist_token_id,
+                                                                        device="cuda"))).flatten()
+                    pin, trn = torch.tensor(p, device="cuda"), torch.tensor(t, device="cuda")
+                else:
+                    raw = doc[: args.len]
+                    ids, where = gist(raw)
                 tail_from = int(where[-args.tail])
-                hs = student(model, ids, mode, tail_from, cfg)[where[-args.tail - 1: -1]]
+                hs = student(model, ids, mode, tail_from, cfg, pin, trn)[where[-args.tail - 1: -1]]
                 ht = teacher.model(input_ids=torch.tensor([raw], device="cuda")).last_hidden_state[0]
                 ht = ht[-args.tail - 1: -1]
                 ls = F.log_softmax(teacher.lm_head(hs).float(), -1)
@@ -118,7 +145,10 @@ def main():
                 else:
                     ids, where = gist(full)
                     a_rows = where[len(raw) - 1: len(full) - 1]   # rows predicting the answer
-                    hs = student(model, ids, mode, int(a_rows[0]), cfg)[a_rows]
+                    seg = (None, None)
+                    if args.window_turns:  # plain text: one turn, nothing pinned
+                        seg = (torch.zeros_like(ids, dtype=torch.bool), torch.zeros_like(ids))
+                    hs = student(model, ids, mode, int(a_rows[0]), cfg, *seg)[a_rows]
                 pred = teacher.lm_head(hs).argmax(-1).tolist()
                 hits["front" if depth < 0.5 else "back"].append(float(pred == ans))
             rec = {"ckpt": ck, "mode": mode, "k": args.k, "merge": args.merge, "coarse": args.coarse,
