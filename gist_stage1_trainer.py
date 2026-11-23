@@ -52,7 +52,13 @@ def parse_args(argv=None):
         help="student:teacher mask pairs (hier, g<m>, raw); default: the teacher chain "
         "g1:raw g2:g1 ... hier:g<L-1>",
     )
-    ap.add_argument("--down", default="hier", help="mask whose output goes to the next layer")
+    ap.add_argument(
+        "--down",
+        default="raw",
+        help="mask whose output goes to the next layer. raw (#29): with a student's output "
+        "passed down, the next layer's teachers read hidden states the parameters move, "
+        "the update is a semi-gradient and 32K training diverged",
+    )
     ap.add_argument("--lambda_ntp", type=float, default=0.0)
     ap.add_argument(
         "--beta", action="store_true", help="per-summary mass bias (gist_lora.SummaryBias)"
@@ -86,10 +92,14 @@ def parse_args(argv=None):
         help="staged training: from this step use --phase2_pairs / --phase2_down",
     )
     ap.add_argument("--phase2_pairs", nargs="+", default=["hier:g1"])
-    ap.add_argument("--phase2_down", default="hier")
+    ap.add_argument("--phase2_down", default="raw")
     ap.add_argument(
         "--freeze_level0", action="store_true", help="freeze level-0 adapters in phase 2"
     )
+    ap.add_argument("--freeze", nargs="*", default=[], choices=["embed", "beta"],
+                    help="parameter groups kept fixed (diagnosis of #29's 32K divergence)")
+    ap.add_argument("--lr_mult", type=float, default=1.0,
+                    help="scales the schedule's base LR, also after --resume")
     ap.add_argument("--seq_len", type=int, default=8192)
     ap.add_argument(
         "--batch", type=int, default=8, help="sequences per optimizer step (accumulated)"
@@ -140,8 +150,6 @@ def parse_args(argv=None):
     args = ap.parse_args(argv)
     if args.pairs is None:
         args.pairs = teacher_chain(args.levels) + (["sel:raw"] if args.select_train else [])
-    if args.select_train and args.down == "hier":
-        args.down = "sel"
     return args
 
 
@@ -371,10 +379,16 @@ def main(argv=None):
         args.start_step = resumed
         for _ in range(resumed * accum):  # the data order continues where it stopped
             next(it)
+    for g in opt.param_groups:  # after the resume, which restores initial_lr
+        g["initial_lr"] = args.lr * args.lr_mult
+    sched.base_lrs = [args.lr * args.lr_mult] * len(opt.param_groups)
+    for name in args.freeze:
+        for p in groups[name]:
+            p.requires_grad_(False)
     preempt = gist_resume.Preemption()
 
     def evaluate(step):
-        down = Global_data.stage1["down"]
+        down = "sel" if args.select_train else "hier"  # the inference path, whatever --down
         rec = {
             "step": step,
             "down": down,
