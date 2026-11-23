@@ -309,12 +309,14 @@ def test_select_hybrid_equals_the_dense_mask(cfg, coarse, k, agent):
     else:
         ids = _ids(n_raw=300)
     grads, losses = {}, {}
+    import os
     try:
-        for impl in ("dense", "hybrid"):
+        for impl in ("dense", "hybrid_ref", "hybrid"):
+            os.environ["GIST_SEL_REF"] = "1" if impl == "hybrid_ref" else "0"
             Global_data.stage1 = {
                 "pairs": [("sel", "raw")], "down": "sel", "lambda_ntp": 0.0,
                 "select": {"cfg": gist_beam.BeamConfig(k=(k,), coarse=coarse), "rows_from": 0,
-                           "impl": impl}}
+                           "impl": impl.split("_")[0]}}
             torch.manual_seed(0)
             model = GistQwen2ForCausalLM(cfg).float().train()
             apply_lora(model, "gist", r=4)
@@ -334,10 +336,12 @@ def test_select_hybrid_equals_the_dense_mask(cfg, coarse, k, agent):
                            if p.grad is not None}
     finally:
         Global_data.raw_window, Global_data.window_turns = saved_w
+        os.environ.pop("GIST_SEL_REF", None)
     assert losses["dense"] > 1e-6
-    assert abs(losses["dense"] - losses["hybrid"]) <= 1e-5 * losses["dense"], losses
-    assert grads["dense"].keys() == grads["hybrid"].keys()
-    rel = {n: float((grads["hybrid"][n] - grads["dense"][n]).abs().max()
-                    / grads["dense"][n].abs().max().clamp_min(1e-30)) for n in grads["dense"]}
-    bad = {n: r for n, r in rel.items() if r > 1e-4}  # fp32 rounding: <= 5e-6 seen
-    assert not bad, (max(rel.values()), bad)
+    for impl in ("hybrid_ref", "hybrid"):  # the torch gather, then the Triton kernel
+        assert abs(losses["dense"] - losses[impl]) <= 1e-5 * losses["dense"], (impl, losses)
+        assert grads["dense"].keys() == grads[impl].keys()
+        rel = {n: float((grads[impl][n] - grads["dense"][n]).abs().max()
+                        / grads["dense"][n].abs().max().clamp_min(1e-30)) for n in grads["dense"]}
+        bad = {n: r for n, r in rel.items() if r > 1e-4}  # fp32 rounding: <= 5e-6 seen
+        assert not bad, (impl, max(rel.values()), bad)

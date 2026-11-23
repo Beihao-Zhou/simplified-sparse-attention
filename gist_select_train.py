@@ -90,6 +90,14 @@ def _compact(vals: torch.Tensor) -> torch.Tensor:
     return vals.gather(1, order[:, :max(n_max, 1)])
 
 
+def _cat_lists(lists, stack: bool = False) -> torch.Tensor:
+    """Key lists of different widths, padded with -1 to the widest: concatenated along the
+    rows ([n, c]) or stacked ([len, n, c])."""
+    cap = max(l.shape[-1] for l in lists)
+    padded = [torch.nn.functional.pad(l, (0, cap - l.shape[-1]), value=-1) for l in lists]
+    return torch.stack(padded) if stack else torch.cat(padded, 0)
+
+
 @torch.no_grad()
 def selected_lists(tree, lo, rows, q, k, beta, cfg: gb.BeamConfig, scaling):
     """X for rows [n] of one KV group: [n, cap] key positions, -1 empty. q [h, n, d]."""
@@ -136,6 +144,9 @@ def merge(o_s, lse_s, o_x, lse_x):
     return (ws[..., None] * o_s + wx[..., None] * o_x) / (ws + wx)[..., None]
 
 
+_CACHE = {"f": None, "key": None, "val": None}
+
+
 def select_attention(flex, q_in, k_att, v_att, gqa, score_mod, query, key, value, beta,
                      kwargs, sel, perm, scaling, kernel_options=None, chunk: int = 1024):
     """The "sel" student, [B, T, H, d] as gist_flex_attention's attend returns.
@@ -150,16 +161,47 @@ def select_attention(flex, q_in, k_att, v_att, gqa, score_mod, query, key, value
     H_kv = key.shape[1]
     hpg = H // H_kv
     cfg = sel["cfg"]
-    feats = [_features(ids, f, b, sel["rows_from"]) for b in range(B)]
-    trees, los, sel_rows = zip(*feats)
-    mod = structured_mask_mod(f, trees, los, sel_rows, perm, cfg.coarse)
-    bm = make_block_mask(mod, B, T, 128, str(query.device), query.is_cuda)
+    # S and the trees depend on the positions only: built once per forward, shared by the
+    # layers and their checkpoint recomputes (holding f itself, as an id can be reused)
+    key_ = (sel["rows_from"], cfg.coarse)
+    if _CACHE["f"] is not f or _CACHE["key"] != key_:
+        feats = [_features(ids, f, b, sel["rows_from"]) for b in range(B)]
+        trees, los, sel_rows = zip(*feats)
+        mod = structured_mask_mod(f, trees, los, sel_rows, perm, cfg.coarse)
+        bm = make_block_mask(mod, B, T, 128, str(query.device), query.is_cuda)
+        _CACHE.update(f=f, key=key_, val=(trees, los, sel_rows, bm))
+    trees, los, sel_rows, bm = _CACHE["val"]
+    # this mask_mod is inlined into the kernel: with the default 128 x 64 forward tiles its
+    # template needs 415 KB of shared memory (an H200 has 227 KB); 64 x 64 compiles
+    opts = {"BLOCK_M": 64, "BLOCK_N": 64, **(kernel_options or {})}
     o_s, lse_s = flex(q_in, k_att, v_att, block_mask=bm, score_mod=score_mod, scale=scaling,
-                      enable_gqa=gqa, return_lse=True, kernel_options=kernel_options)
+                      enable_gqa=gqa, return_lse=True, kernel_options=opts)
     o_x = torch.zeros_like(o_s, dtype=torch.float32)
     lse_x = torch.full_like(lse_s, float("-inf"), dtype=torch.float32)
+    import os
+    triton_path = query.is_cuda and os.environ.get("GIST_SEL_REF", "0") != "1"
     for b in range(B):
         rows_all = torch.nonzero(sel_rows[b]).flatten()
+        if rows_all.numel() == 0:
+            continue
+        if triton_path:  # one gather kernel per sequence over all its selecting rows
+            from kernels.gather_attn import gather_attention as gather_kernel
+            per = []
+            for g in range(H_kv):
+                hs = slice(g * hpg, (g + 1) * hpg)
+                bg = None if beta is None else beta[b, g].detach()
+                per.append(_cat_lists([
+                    selected_lists(trees[b], los[b], rows_all[i:i + chunk],
+                                   query[b, hs][:, rows_all[i:i + chunk]].detach(),
+                                   key[b, g].detach(), bg, cfg, scaling)
+                    for i in range(0, rows_all.numel(), chunk)]))
+            idx = _cat_lists(per, stack=True)                              # [H_kv, n, cap]
+            o, lse = gather_kernel(query[b], key[b], value[b],
+                                   None if beta is None else beta[b].float(), rows_all,
+                                   idx.int(), scaling)
+            o_x[b][:, rows_all] = o
+            lse_x[b][:, rows_all] = lse
+            continue
         for g in range(H_kv):
             hs = slice(g * hpg, (g + 1) * hpg)
             bg = None if beta is None else beta[b, g]
