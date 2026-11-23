@@ -6,6 +6,9 @@
 cd "$(dirname "$0")/.."
 source /data/venv/bin/activate
 export HF_HOME=/data/hf PYTHONPATH="$(pwd)" PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+# head dim 128: the gist mask_mod inlined into flex's backward needs 312 KB of shared memory
+# with the default tiles (an H200 has 227 KB)
+export GIST_FLEX_KERNEL_OPTIONS=${GIST_FLEX_KERNEL_OPTIONS:-'{"BLOCK_M":64,"BLOCK_N":64,"BLOCK_M1":32,"BLOCK_N1":64,"BLOCK_M2":64,"BLOCK_N2":32,"num_stages":1}'}
 M=${MODEL:-/data/models/Qwen2.5-7B-Instruct-1M}
 A=/data/agent_data E=/data/agent_longeval/len262144
 mkdir -p logs runs results
