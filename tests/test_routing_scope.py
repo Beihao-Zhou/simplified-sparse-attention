@@ -96,3 +96,26 @@ def test_unit_exclude_marks_pinned_and_sink():
     ex = unit_exclude(ids, GIDS, 3, pinned)
     assert ex.tolist() == [True] * 6 + [False] * 6       # 3 pinned + the next 3 raw tokens
     assert unit_exclude(ids, GIDS, 3).tolist() == [True] * 3 + [False] * 9
+
+
+def test_lo_leaf_takes_forced_units_out_of_the_softmax():
+    """#33: with lo_leaf, a forced unit's summary score cannot change the loss; lo_leaf past
+    every unit is the default."""
+    q, q_pos, k, ids, beta = _inputs()
+    n0 = int((ids == GIDS[0]).sum())
+    base = routing_kl(q, q_pos, k, ids, GIDS, 0.3, beta)
+    far = torch.full((q_pos.numel(),), 4 ** len(GIDS) * n0)
+    torch.testing.assert_close(routing_kl(q, q_pos, k, ids, GIDS, 0.3, beta, lo_leaf=far), base,
+                               rtol=0, atol=0)
+    lo = (torch.cumsum((ids == GIDS[0]).long(), 0)[q_pos] - 40).clamp(min=0)  # last 40 leaves forced
+    got = routing_kl(q, q_pos, k, ids, GIDS, 0.3, beta, lo_leaf=lo)
+    assert not torch.isclose(got, base)
+    g0 = torch.nonzero(ids == GIDS[0]).flatten()
+    forced = g0[int(lo.max()):]                              # forced for every row
+    b2 = beta.clone()
+    b2[:, forced] += 5.0
+    torch.testing.assert_close(routing_kl(q, q_pos, k, ids, GIDS, 0.3, b2, lo_leaf=lo), got,
+                               rtol=1e-12, atol=1e-12)
+    b3 = beta.clone()
+    b3[:, g0[0]] += 5.0                                      # a free unit
+    assert not torch.isclose(routing_kl(q, q_pos, k, ids, GIDS, 0.3, b3, lo_leaf=lo), got)

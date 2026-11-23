@@ -272,7 +272,7 @@ def gist_flex_attention_forward(
     if st.get("route_rows", 0) > 0 and module.layer_idx > 0:
         _stage1_routing(module, query, key_orig, beta, kwargs["gist_input_ids"],
                         kwargs["gist_route_exclude"],
-                        kwargs["gist_loss_rows"], scaling, st)
+                        kwargs["gist_loss_rows"], scaling, st, kwargs["gist_features"])
     return out, None
 
 
@@ -320,7 +320,8 @@ def _select_block_mask(query, key, beta, kwargs, sel, perm, scaling):
                                  BLOCK_SIZE=128, _compile=query.is_cuda)
 
 
-def _stage1_routing(module, query, key, beta, input_ids, exclude, rows, scaling, st):
+def _stage1_routing(module, query, key, beta, input_ids, exclude, rows, scaling, st,
+                    features=None):
     """Routing KL on st["route_rows"] random loss rows per sequence (layer 0 excluded)."""
     from gist_qwen2 import repeat_kv
     from gist_routing import routing_kl
@@ -332,10 +333,16 @@ def _stage1_routing(module, query, key, beta, input_ids, exclude, rows, scaling,
         perm = torch.randperm(cand.numel(), device=cand.device)[: st["route_rows"]]
         pick = cand[perm].sort().values
         bt = None if beta is None else beta[b].repeat_interleave(hpg, 0)
+        lo = None
+        if st.get("route_free"):  # forced units out of the softmax (#33)
+            from gist_select_train import _features
+            # ponytail: the tree is rebuilt per layer; cache it per forward if it shows up
+            lo = _features(input_ids, features, b, 0)[1][pick]
         loss = routing_kl(
             query[b][:, pick], pick, k[b], input_ids[b], Global_data.gist_token_id, scaling, bt,
             exclude=None if exclude is None else exclude[b],
-            scope=st.get("route_scope", "level"), oracle_k=st.get("route_oracle_k", 256))
+            scope=st.get("route_scope", "level"), oracle_k=st.get("route_oracle_k", 256),
+            lo_leaf=lo)
         if _first(st, (module.layer_idx, "route", b)):
             st["losses"].setdefault("route", []).append(loss)
 

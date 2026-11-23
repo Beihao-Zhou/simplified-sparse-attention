@@ -38,6 +38,7 @@ def routing_kl(
     exclude: Optional[torch.Tensor] = None,
     scope: str = "level",
     oracle_k: int = 256,
+    lo_leaf: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     """q [H, R, d] at positions q_pos [R]; k [H, K, d] for ids [K]; beta [H, K] or None.
 
@@ -46,6 +47,9 @@ def routing_kl(
     children of the oracle_k level-(l+1) units with the most true mass (per head and row)
     and the children of the still-open parent, as decode compares only the children of
     the selected parents (#19); "level" (default) uses every closed unit of the level.
+    lo_leaf [R]: each row's lowest forced leaf (gist_beam._forced_leaf_lo). Given, forced
+    units (id >= lo_leaf // 4^l at level l) leave the softmax, which then compares only the
+    units the beam picks among (#33); the forced recent ones would hold most of the mass.
     """
     if scope not in ("level", "oracle_children"):
         raise ValueError(f"unknown routing scope {scope!r}")
@@ -92,6 +96,9 @@ def routing_kl(
                 open_parent = parent[None, :] >= closed_up[:, None]  # [R, G]
                 under = oracle.gather(-1, parent.clamp(max=n_up)[None, None].expand(H, R, G))
             c = c & (under | open_parent[None])
+        if lo_leaf is not None:
+            node = torch.arange(G, device=ids.device)
+            c = c & (node[None, :] < (lo_leaf // 4 ** li)[:, None])[None]
         rows = c.sum(-1) >= 2  # [H, R]
         if not rows.any():
             continue

@@ -73,6 +73,9 @@ def parse_args(argv=None):
         "oracle parents (gist_routing.py)",
     )
     ap.add_argument("--route_oracle_k", type=int, default=256)
+    ap.add_argument("--route_free", action="store_true",
+                    help="routing KL over the units the beam picks among only: forced units "
+                    "(previous chunk, raw window, recent turns) leave the softmax (#33)")
     ap.add_argument(
         "--select_train",
         action="store_true",
@@ -180,6 +183,7 @@ def stage1_config(args, pairs=None, down=None):
         "route_scope": getattr(args, "route_scope", "level"),
         "select": select_config(args),
         "route_oracle_k": getattr(args, "route_oracle_k", 256),
+        "route_free": getattr(args, "route_free", False),
         "weights": {"route": args.lambda_route},
     }
 
