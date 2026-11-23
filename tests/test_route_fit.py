@@ -39,3 +39,36 @@ def test_one_key_recovers_one_key_mass_and_four_keys_two_directions():
         keys, b = fit(q[:, tr], m2[tr], free[tr], k0, b0, m, sc, steps=400)
         r[m] = _ratio(keys, b, q[:, te], m2[te], free[te], sc)
     assert r[4] > r[1] + 0.05, r
+
+
+def test_hit_is_the_key_leaf_selected_by_a_retrieval_row():
+    """run_group's hit: under the oracle, retrieval rows whose queries align with the key
+    leaf's tokens select it; anti-aligned, they do not."""
+    import argparse
+
+    import gist_beam as gb
+    from experiments.route_fit import run_group
+    from tests.test_beam_oracle import _tree
+
+    tree = _tree()
+    T, d, h = tree.level.numel(), 16, 2
+    raw = torch.nonzero(tree.level < 0).flatten()
+    rows = raw[-12:]
+    n_ret = 4
+    leaf = torch.tensor([3])                                    # far back: closed, not forced
+    toks = torch.nonzero(tree.compressible & (tree.leaf == 3)).flatten()
+    u = torch.zeros(d)
+    u[0] = 1.0
+    q = torch.randn(h, rows.numel(), d) * 0.1
+    q[:, -n_ret:] = u
+    args = argparse.Namespace(k=2, steps=1, lr=0.05)
+    cfg = gb.BeamConfig(k=(2,), merge="union")
+    test = torch.ones(rows.numel(), dtype=torch.bool)
+    ident = (torch.ones(T, d), torch.zeros(T, d), torch.arange(T))
+    for sign, want in ((10.0, True), (-10.0, False)):
+        torch.manual_seed(0)
+        k = torch.randn(T, d) * 0.1
+        k[toks] = sign * u
+        res = run_group(tree, q, k, None, rows, test, n_ret, leaf, cfg, d ** -0.5, *ident, args,
+                        names=("oracle",))
+        assert res["oracle"]["hit"] is want, (sign, res["oracle"])

@@ -75,6 +75,8 @@ def main(argv=None):
     ap.add_argument("--model", default="Qwen/Qwen2.5-0.5B-Instruct")
     ap.add_argument("--stage1", required=True)
     ap.add_argument("--data", required=True, help="experiments/agent_data.py output")
+    ap.add_argument("--heldout_frac", type=float, default=None,
+                    help="issues held out (default agent_data's); match the eval sets' (#37)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--ctx_min", type=int, default=8192)
     ap.add_argument("--ctx_max", type=int, default=131072)
@@ -117,7 +119,8 @@ def main(argv=None):
     opt = torch.optim.AdamW(params, lr=args.lr, weight_decay=0.0)
     sched = torch.optim.lr_scheduler.LambdaLR(
         opt, lambda s: min(1.0, (s + 1) / args.warmup) * 0.5 * (1 + math.cos(math.pi * min(s, args.steps) / args.steps)))
-    rows = load_split(args.data, "train")
+    rows = load_split(args.data, "train") if args.heldout_frac is None else \
+        load_split(args.data, "train", args.heldout_frac)
     pool = [i for i, n in enumerate(rows["length"]) if n >= args.ctx_min]
     head = len(tok("<|im_start|>assistant\n", add_special_tokens=False).input_ids)
     print(f"{len(pool)} trajectories of at least {args.ctx_min} tokens", flush=True)

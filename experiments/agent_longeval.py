@@ -79,13 +79,17 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--lens", type=int, nargs="+", default=[262144, 1048576])
     ap.add_argument("--n", type=int, default=20)
+    ap.add_argument("--heldout_frac", type=float, default=None,
+                    help="issues held out (default agent_data's); training on these samples' "
+                    "source must use the same fraction (#37)")
     args = ap.parse_args()
     import datasets
 
     from experiments.agent_data import HELDOUT_FRAC, load_split
 
     parts = [os.path.join(os.path.expanduser(args.src), "parts")]
-    rows = list(load_split(args.src, "heldout", HELDOUT_FRAC))
+    frac = HELDOUT_FRAC if args.heldout_frac is None else args.heldout_frac
+    rows = list(load_split(args.src, "heldout", frac))
     n_traj = len(rows)
     rows = one_per_issue(rows)
     print(f"{n_traj} held-out trajectories, {len(rows)} issues (longest attempt each)", flush=True)
@@ -103,7 +107,7 @@ def main():
     for L in args.lens:  # sources per sample, for reproducing or auditing
         ds = datasets.load_from_disk(os.path.join(os.path.expanduser(args.out), f"len{L}"))
         report[L]["sources"] = ds["sources"]
-    json.dump({"src_parts": parts, "lens": report},
+    json.dump({"src_parts": parts, "heldout_frac": frac, "lens": report},
               open(os.path.join(os.path.expanduser(args.out), "report.json"), "w"), indent=1)
 
 

@@ -14,12 +14,15 @@ fit is scored on held-out query rows of the same context. Models:
 
 Fit: per level, cross entropy between the true mass and the softmax of the scores over the
 row's free nodes (closed, not forced), initialized from the learned keys. Metrics, on test
-rows (a random --test_frac of the sampled rows, plus the last row, which asks for the key):
+rows (a random --test_frac of the sampled rows, plus the retrieval rows):
 
     flat[l]    per (row, head): mass of the top-k free level-l nodes by score / by mass
     beam       gist_beam.select with these scores (k per level, union over the group's
                heads): leaf mass captured / that of the oracle's selection
-    hit        the pass key's leaf selected for the last row (mean over KV groups)
+    hit        the pass key's leaf selected by some retrieval row: the rows of the question
+               and those predicting the appended answer (teacher forcing, as select_gate);
+               hit_rows the share of retrieval rows that select it. Fitted layers only;
+               learned and oracle are also scored at every layer (hit_all, hit_ctx).
 
 flat_fit is flat on the rows fitted: fit far above test means the fit memorizes.
 
@@ -30,6 +33,7 @@ import argparse
 import collections
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -96,8 +100,14 @@ def leaf_mass(sel0, free0, mass0):
     return (mass0 * (sel0 & free0)[:, None]).sum(-1)
 
 
-def run_group(tree, q, k, b, rows, test, key_leaf, cfg, scaling, cos, sin, rope_pos, args):
-    """All models for one KV group: q [h, n, d] at rows [n], k [T, d], b [T] or None."""
+MODELS = {"learned": None, "fit1": (1, False), "fit4": (4, False), "nope1": (1, True),
+          "oracle": None}
+
+
+def run_group(tree, q, k, b, rows, test, n_ret, key_leaf, cfg, scaling, cos, sin, rope_pos,
+              args, names=tuple(MODELS)):
+    """Models `names` for one KV group: q [h, n, d] at rows [n], k [T, d], b [T] or None. The
+    last n_ret rows (test rows) are the retrieval rows: the question and the answer."""
     L = tree.num_levels
     lo = gb._forced_leaf_lo(tree, rows, 1, 0, 0)
     free = [gb._closed(tree, rows, l) & ~gb._forced(tree, rows, l, lo, cfg.fanout) for l in range(L)]
@@ -105,10 +115,9 @@ def run_group(tree, q, k, b, rows, test, key_leaf, cfg, scaling, cos, sin, rope_
     b = torch.zeros(k.shape[0], device=k.device) if b is None else b
     fitr = ~test
     q_nope = unrotate(q, cos[rope_pos[rows]][None], sin[rope_pos[rows]][None])
-    models = {"learned": None, "fit1": (1, False), "fit4": (4, False), "nope1": (1, True),
-              "oracle": None}
     out = {}
-    for name, spec in models.items():
+    for name in names:
+        spec = MODELS[name]
         sc = []
         for l in range(L):
             gp = tree.gpos[l]
@@ -138,7 +147,11 @@ def run_group(tree, q, k, b, rows, test, key_leaf, cfg, scaling, cos, sin, rope_
     for name, (rec, s_sel) in out.items():
         got = leaf_mass(s_sel.sel[0], free[0][test], mass[0][test])
         rec["beam"] = float((got / best).mean())
-        rec["hit"] = bool(s_sel.sel[0][-1, key_leaf].any()) if key_leaf.numel() else None
+        if key_leaf.numel():  # per retrieval row: is a leaf holding the key selected
+            r_hit = s_sel.sel[0][-n_ret:][:, key_leaf].any(-1)
+            rec["hit"], rec["hit_rows"] = bool(r_hit.any()), float(r_hit.float().mean())
+        else:
+            rec["hit"] = rec["hit_rows"] = None
         res[name] = rec
     return res
 
@@ -151,7 +164,8 @@ def main():
     ap.add_argument("--len", type=int, default=8192)
     ap.add_argument("--depths", type=float, nargs="+", default=[0.1, 0.3, 0.5, 0.7, 0.9])
     ap.add_argument("--reps", type=int, default=1)
-    ap.add_argument("--layers", type=int, nargs="+", default=[2, 8, 14, 20])
+    ap.add_argument("--layers", type=int, nargs="+", default=[2, 8, 14, 20],
+                    help="layers fitted; learned and oracle hits are taken at every layer")
     ap.add_argument("--n_rows", type=int, default=1024, help="sampled raw query rows")
     ap.add_argument("--test_frac", type=float, default=0.25)
     ap.add_argument("--k", type=int, default=16)
@@ -167,7 +181,8 @@ def main():
             for r in datasets.load_from_disk(os.path.expanduser(args.docs))]
     cfg = gb.BeamConfig(k=(args.k,), merge="union")
     scaling = model.model.layers[0].self_attn.scaling
-    recorder = dr.Recorder(args.layers)
+    recorder = dr.Recorder(range(model.config.num_hidden_layers))
+    n_q = len(tok(dr.QUESTION, add_special_tokens=False).input_ids)
     done = set()
     if os.path.exists(args.out):  # resumable per context
         done = {(r["depth"], r["rep"]) for r in map(json.loads, open(args.out))}
@@ -176,15 +191,24 @@ def main():
         for raw, key_pos, depth in dr.contexts(tok, docs, args.len, args.depths, seed=rep):
             if (depth, rep) in done:
                 continue
-            ids, where = gist(raw)
+            # the answer appended as select_gate's passkey does (teacher forcing): the rows
+            # of the question and those predicting the answer are where retrieval happens
+            key = re.search(r"\d{5}", tok.decode([raw[p] for p in key_pos])).group(0)
+            full = raw + tok(" " + key, add_special_tokens=False).input_ids
+            ids, where = gist(full)
             T = ids.numel()
+            ret = where[len(raw) - n_q: len(full) - 1]
             g = torch.Generator().manual_seed(rep * 1000 + int(depth * 100))
-            pool = where[where >= T // 4][:-1]
-            pick = pool[torch.randperm(pool.numel(), generator=g)[: args.n_rows - 1].sort().values]
-            rows = torch.cat([pick, where[-1:]])                  # the last row asks for the key
+            pool = where[: len(raw) - n_q]
+            pool = pool[pool >= T // 4]
+            n_pick = args.n_rows - ret.numel()
+            pick = pool[torch.randperm(pool.numel(), generator=g)[:n_pick].sort().values]
+            rows = torch.cat([pick, ret])
             test = torch.rand(rows.numel(), generator=g) < args.test_frac
-            test[-1] = True
+            test[-ret.numel():] = True
             test = test.to(rows.device)
+            is_ret = torch.zeros_like(test)
+            is_ret[-ret.numel():] = True
             recorder.rows, recorder.data = rows, {}
             with torch.no_grad():
                 model.model(input_ids=ids[None], attention_mask=torch.ones_like(ids)[None])
@@ -197,13 +221,18 @@ def main():
             key_leaf = key_leaf[key_leaf < tree.gpos[0].numel()]
             for layer, (Q, K, V, beta) in sorted(recorder.data.items()):
                 hpg = Q.shape[0] // K.shape[0]
+                fitted = layer in args.layers
+                # other layers: learned and oracle on the retrieval rows only
+                sub = slice(None) if fitted else is_ret
                 for gi in range(K.shape[0]):
-                    res = run_group(tree, Q[gi * hpg:(gi + 1) * hpg], K[gi],
-                                    None if beta is None else beta[gi], rows, test, key_leaf,
-                                    cfg, scaling, cos, sin, rope_pos, args)
+                    res = run_group(tree, Q[gi * hpg:(gi + 1) * hpg][:, sub], K[gi],
+                                    None if beta is None else beta[gi], rows[sub], test[sub],
+                                    ret.numel(), key_leaf, cfg, scaling, cos, sin, rope_pos, args,
+                                    tuple(MODELS) if fitted else ("learned", "oracle"))
                     for name, r in res.items():
                         rec = {"ckpt": args.ckpt, "len": args.len, "depth": depth, "rep": rep,
-                               "layer": layer, "group": gi, "model": name, "k": args.k, **r}
+                               "layer": layer, "group": gi, "model": name, "k": args.k,
+                               "fitted": fitted, **r}
                         out.write(json.dumps(rec) + "\n")
             out.flush()
             print(f"depth {depth} rep {rep} done", flush=True)
@@ -211,8 +240,21 @@ def main():
 
 
 def summary(path):
+    """Fitted layers: ratios and hits per model. All layers (learned, oracle): hit_all, the
+    share of (layer, group) that select the key; hit_ctx, the contexts where any does;
+    the oracle's hit per layer, which shows the layers that retrieve."""
     acc = collections.defaultdict(lambda: collections.defaultdict(list))
+    ctx = collections.defaultdict(lambda: collections.defaultdict(bool))
+    per_layer = collections.defaultdict(list)
     for r in map(json.loads, open(path)):
+        if r.get("hit") is not None and r["model"] in ("learned", "oracle"):
+            acc[r["model"]]["hit_all"].append(float(r["hit"]))
+            c = ctx[r["model"]]
+            c[(r["depth"], r["rep"])] = c[(r["depth"], r["rep"])] or r["hit"]
+            if r["model"] == "oracle":
+                per_layer[r["layer"]].append(float(r["hit"]))
+        if not r.get("fitted", True):
+            continue
         a = acc[r["model"]]
         for key in ("flat", "flat_fit"):
             for l, v in enumerate(r[key]):
@@ -221,8 +263,12 @@ def summary(path):
         a["beam"].append(r["beam"])
         if r["hit"] is not None:
             a["hit"].append(float(r["hit"]))
+            a["hit_rows"].append(r["hit_rows"])
+    for name, c in ctx.items():
+        acc[name]["hit_ctx"] = [float(v) for v in c.values()]
     for name, a in acc.items():
         print(name, {k: round(sum(v) / len(v), 3) for k, v in sorted(a.items())})
+    print("oracle hit per layer", {l: round(sum(v) / len(v), 2) for l, v in sorted(per_layer.items())})
 
 
 if __name__ == "__main__":

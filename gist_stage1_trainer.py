@@ -73,6 +73,9 @@ def parse_args(argv=None):
         "oracle parents (gist_routing.py)",
     )
     ap.add_argument("--route_oracle_k", type=int, default=256)
+    ap.add_argument("--heldout_frac", type=float, default=None,
+                    help="agent data: issues held out (default experiments/agent_data.py's); a "
+                    "larger fraction holds out a superset (#37: 0.3 for the long eval sets)")
     ap.add_argument("--route_free", action="store_true",
                     help="routing KL over the units the beam picks among only: forced units "
                     "(previous chunk, raw window, recent turns) leave the softmax (#33)")
@@ -188,14 +191,14 @@ def stage1_config(args, pairs=None, down=None):
     }
 
 
-def load_data(path, split):
+def load_data(path, split, frac=None):
     """A saved dataset, or converted agent trajectories (a directory with parts/, from
     experiments/agent_data.py), whose split is selected by issue at load time."""
     path = os.path.expanduser(path)
     if os.path.isdir(os.path.join(path, "parts")):
         from experiments.agent_data import load_split
 
-        return load_split(path, split)
+        return load_split(path, split) if frac is None else load_split(path, split, frac)
     return datasets.load_from_disk(path)
 
 
@@ -369,7 +372,8 @@ def main(argv=None):
         * (1 + math.cos(math.pi * min(s, args.steps) / args.steps)),
     )
     Global_data.stage1 = stage1_config(args)
-    train, held = load_data(args.data, "train"), load_data(args.heldout, "heldout")
+    train = load_data(args.data, "train", args.heldout_frac)
+    held = load_data(args.heldout, "heldout", args.heldout_frac)
     held = held.select(range(args.eval_rows))
     held_long = held
     if args.heldout_long:
