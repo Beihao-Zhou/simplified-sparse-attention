@@ -1,0 +1,24 @@
+experiments/decode_speed.py
+  s_466735a13fa48a::t_fcd7f8e8dc57c7 43-45,47-48,61-64
+experiments/teacher_score.py
+  s_466735a13fa48a::t_c2a10d3831c72c 1-45,48-54
+  s_466735a13fa48a::t_6ec688f9c12d12 46-47
+experiments/m7b_run.sh
+  s_466735a13fa48a::t_c1fa5b630977ed 1-28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "215036e2a3b41d38acd19d5daee86a2b49cbdd89",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
