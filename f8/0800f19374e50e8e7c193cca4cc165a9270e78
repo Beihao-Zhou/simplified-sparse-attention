@@ -1,0 +1,28 @@
+experiments/teacher_score.py
+  s_466735a13fa48a::t_a8ace50a511546 38,40-42
+gist_opsd_long.py
+  s_466735a13fa48a::t_27f5aaadc59d23 192,194-200,204-205,207-208
+  s_466735a13fa48a::t_a0683e78ee3492 201-203,206
+experiments/decode_speed.py
+  s_466735a13fa48a::t_a88ee1accc5561 38,40-41
+gist_stage1_trainer.py
+  s_466735a13fa48a::t_27f5aaadc59d23 27,277
+tests/test_opsd_long.py
+  s_466735a13fa48a::t_c7aadaac9b8aa9 134-147
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "f80800f19374e50e8e7c193cca4cc165a9270e78",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
