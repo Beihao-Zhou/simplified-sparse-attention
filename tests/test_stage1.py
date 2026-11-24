@@ -313,6 +313,32 @@ def test_base_teacher_is_the_raw_stream(cfg, k, zero):
         assert per_layer[-1] > 1e-6, per_layer
 
 
+def test_hybrid_down_keeps_raw_rows_raw_and_writes_summaries_with_the_gist_mask(cfg):
+    """#41: down=hybrid passes raw rows' raw output (the base stream, at every layer) and
+    summary rows' gist-mask output; the latter equals down=hier's at the first layer."""
+    cfg._attn_implementation = gist_flex_attention.GIST_FLEX
+    Global_data.train_attn = "flex"
+    torch.manual_seed(0)
+    model = GistQwen2ForCausalLM(cfg).float().eval()
+    apply_lora(model, "gist", r=4)
+    _randomize_lora(model)
+    ids = _ids(n_raw=300)
+    summ = torch.isin(ids, torch.tensor(Global_data.gist_token_id))[0]
+    rec = {}
+    for down in ("raw", "hybrid", "hier"):
+        Global_data.stage1 = {"pairs": [], "down": down, "lambda_ntp": 0.0, "record": {}}
+        with torch.no_grad():
+            model(input_ids=ids, attention_mask=torch.ones_like(ids), use_cache=False)
+        rec[down] = Global_data.stage1["record"]
+    assert summ.any() and len(rec["hybrid"]) >= 2
+    for l in rec["hybrid"]:
+        torch.testing.assert_close(rec["hybrid"][l][0, ~summ], rec["raw"][l][0, ~summ],
+                                   rtol=0, atol=0)
+    first = min(rec["hybrid"])
+    torch.testing.assert_close(rec["hybrid"][first][0, summ], rec["hier"][first][0, summ])
+    assert (rec["hybrid"][first][0, summ] - rec["raw"][first][0, summ]).abs().max() > 1e-4
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="flex backward needs CUDA")
 @pytest.mark.parametrize("coarse", [False, True])
 @pytest.mark.parametrize("k", [1, 3])

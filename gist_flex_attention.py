@@ -113,7 +113,7 @@ def prepare_gist_flex(
         # non-pad tokens past the sink.
         B, T = input_ids.shape
         st1 = Global_data.stage1
-        names = {n for pair in st1["pairs"] for n in pair} | {st1["down"]}
+        names = {n for pair in st1["pairs"] for n in pair} | down_masks(st1)
         out["gist_teacher_masks"] = {
             n: make_block_mask(make_teacher_mask_mod(f, n, kv_perm=perm), B, T, block_size,
                                str(input_ids.device), input_ids.is_cuda)
@@ -257,7 +257,7 @@ def gist_flex_attention_forward(
     if st is None:
         return attend(gist_block_mask), None
     teacher_masks = kwargs["gist_teacher_masks"]
-    names = {n for pair in st["pairs"] for n in pair} | {st["down"]}
+    names = {n for pair in st["pairs"] for n in pair} | down_masks(st)
     if "sel" in names and st["select"].get("impl") == "dense":  # [T, T] mask: <= ~32K, tests
         teacher_masks = {**teacher_masks, "sel": _select_block_mask(
             query, key_orig, beta, kwargs, st["select"], gist_kv_perm, scaling)}
@@ -268,7 +268,7 @@ def gist_flex_attention_forward(
             None if beta is None else beta.float(), kwargs, st["select"], gist_kv_perm, scaling,
             _kernel_options())}
     out = _stage1_attention(module, attend, gist_block_mask, teacher_masks,
-                            kwargs["gist_loss_rows"], st)
+                            kwargs["gist_loss_rows"], st, kwargs["gist_features"].level >= 0)
     if st.get("route_rows", 0) > 0 and module.layer_idx > 0:
         _stage1_routing(module, query, key_orig, beta, kwargs["gist_input_ids"],
                         kwargs["gist_route_exclude"],
@@ -366,7 +366,15 @@ def _rel_mse(student: torch.Tensor, teacher: torch.Tensor, rows: torch.Tensor) -
     return ((s - t).pow(2).sum(-1) / (t.pow(2).sum(-1) + 1e-6)).mean()
 
 
-def _stage1_attention(module, attend, hier_mask, teacher_masks, rows, st):
+def down_masks(st) -> set:
+    """The masks the output passed down is made of: st["down"], or for "hybrid" (#41) raw
+    for raw rows and hier (the gist mask, as at inference) for summary rows. Raw rows never
+    read summary keys under raw, so they stay the base model's stream (no moving target,
+    #29) while summaries are written as at inference instead of reading the whole prefix."""
+    return {"raw", "hier"} if st["down"] == "hybrid" else {st["down"]}
+
+
+def _stage1_attention(module, attend, hier_mask, teacher_masks, rows, st, summary_rows=None):
     """Per-layer MSE of stage 1 (docs/opsd-handoff.md): the same q/k/v under several masks.
 
     st["pairs"] lists (student, teacher) mask names, e.g. ("g1", "raw"), ("hier", "g1");
@@ -379,12 +387,12 @@ def _stage1_attention(module, attend, hier_mask, teacher_masks, rows, st):
     it can be passed down (down=sel) without the moving target of #29.
     """
     masks = {"hier": hier_mask, **teacher_masks}
-    students = {s for s, _ in st["pairs"]} | {st["down"]}
+    students = {s for s, _ in st["pairs"]} | down_masks(st)
     outs = {}
     def run(m):  # a BlockMask, or a function computing the output itself ("sel", #29)
         return m() if callable(m) and not hasattr(m, "kv_num_blocks") else attend(m)
 
-    for name in sorted(({n for pair in st["pairs"] for n in pair} | {st["down"]}) - {"base"}):
+    for name in sorted(({n for pair in st["pairs"] for n in pair} | down_masks(st)) - {"base"}):
         if name in students:
             outs[name] = run(masks[name])
         else:
@@ -392,8 +400,12 @@ def _stage1_attention(module, attend, hier_mask, teacher_masks, rows, st):
                 outs[name] = run(masks[name])
     B, T = rows.shape
     proj = {n: module.o_proj(o.reshape(B, T, -1)) for n, o in outs.items()}
+    if st["down"] == "hybrid":
+        sm = summary_rows.reshape(B, T, *[1] * (outs["raw"].dim() - 2))
+        outs["hybrid"] = torch.where(sm, outs["hier"], outs["raw"])
     if st.get("record") is not None:
-        st["record"][module.layer_idx] = proj[st["down"]].detach()
+        st["record"][module.layer_idx] = (proj[st["down"]] if st["down"] in proj else
+                                          module.o_proj(outs[st["down"]].reshape(B, T, -1))).detach()
     if "base" in st:
         proj["base"] = st["base"][module.layer_idx]
     for s_name, t_name in st["pairs"]:
