@@ -80,6 +80,10 @@ def parse_args(argv=None):
     ap.add_argument("--route_free", action="store_true",
                     help="routing KL over the units the beam picks among only: forced units "
                     "(previous chunk, raw window, recent turns) leave the softmax (#33)")
+    ap.add_argument("--route_detach_q", action="store_true",
+                    help="no routing gradient into the queries: the true mass is computed from "
+                    "the student's own q, which the loss could otherwise move toward the router "
+                    "(#34 R4: lowest routing loss, worst beam mass); summary keys and beta learn")
     ap.add_argument(
         "--select_train",
         action="store_true",
@@ -188,6 +192,7 @@ def stage1_config(args, pairs=None, down=None):
         "select": select_config(args),
         "route_oracle_k": getattr(args, "route_oracle_k", 256),
         "route_free": getattr(args, "route_free", False),
+        "route_detach_q": getattr(args, "route_detach_q", False),
         "weights": {"route": args.lambda_route},
     }
 

@@ -184,6 +184,27 @@ def test_level_scalar_bias_gets_no_routing_gradient(cfg):
     assert sb.b.grad.abs().max() < 1e-6 and sb.u.grad.abs().sum() > 0
 
 
+@pytest.mark.parametrize("detach", [False, True])
+def test_route_detach_q_cuts_the_routing_gradient_into_queries(cfg, detach):
+    """Only the routing loss: the last layer's q LoRA gets gradient from it unless detached."""
+    model, _ = _flex_model(cfg, layers=2)
+    apply_lora(model, "all", r=4)
+    _randomize_lora(model)
+    Global_data.stage1 = {
+        "pairs": [("hier", "g1")],
+        "down": "hier",
+        "lambda_ntp": 0.0,
+        "route_rows": 16,
+        "route_detach_q": detach,
+        "weights": {"route": 1.0, "hier|g1": 0.0},
+    }
+    ids = _ids(300)
+    model(input_ids=ids, attention_mask=torch.ones_like(ids), labels=ids.clone()).loss.backward()
+    q = [p for n, p in model.model.layers[-1].self_attn.q_proj.named_parameters() if p.requires_grad]
+    g = sum(float(p.grad.abs().sum()) for p in q if p.grad is not None)
+    assert q and ((g == 0) if detach else (g > 0))
+
+
 def test_freezing_level0_adapters(cfg):
     model, _ = _flex_model(cfg)
     groups = apply_lora(model, "gist", r=4, per_level=True)

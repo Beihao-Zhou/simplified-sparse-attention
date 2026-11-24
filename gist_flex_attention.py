@@ -338,8 +338,11 @@ def _stage1_routing(module, query, key, beta, input_ids, exclude, rows, scaling,
             from gist_select_train import _features
             # ponytail: the tree is rebuilt per layer; cache it per forward if it shows up
             lo = _features(input_ids, features, b, 0)[1][pick]
+        q = query[b][:, pick]
+        if st.get("route_detach_q"):  # the router alone learns: q could move the target mass
+            q = q.detach()
         loss = routing_kl(
-            query[b][:, pick], pick, k[b], input_ids[b], Global_data.gist_token_id, scaling, bt,
+            q, pick, k[b], input_ids[b], Global_data.gist_token_id, scaling, bt,
             exclude=None if exclude is None else exclude[b],
             scope=st.get("route_scope", "level"), oracle_k=st.get("route_oracle_k", 256),
             lo_leaf=lo)
