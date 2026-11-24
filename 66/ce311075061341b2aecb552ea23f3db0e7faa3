@@ -1,0 +1,36 @@
+docs/paper/supervisor.tex
+  s_466735a13fa48a::t_65d3ebf3abcf07 567-569
+  s_466735a13fa48a::t_7c1ccecbbc68c8 60-78
+  s_466735a13fa48a::t_40a283d0962130 55
+  s_466735a13fa48a::t_1257013392c0a2 4-54,56-59,79-82,85-361,365-396,398-429,431-445,450-477,521-522,527-550,560-566,574-608,612-777,782-790,796,1192
+  s_466735a13fa48a::t_6110e3410ec447 1190-1191,1193
+  s_466735a13fa48a::t_bc9620d299a28b 551-559
+  s_466735a13fa48a::t_00e1e4a5d3a049 1-3
+  s_466735a13fa48a::t_86e592e656a8be 362-364
+  s_466735a13fa48a::t_3d2f1a64bbceaa 83-84
+  s_466735a13fa48a::t_2d85439d5e5f0f 797-1140,1149-1174,1176-1189
+  s_466735a13fa48a::t_09ca4e1caaae22 446-449
+  s_466735a13fa48a::t_b0bc80805d8ef1 570-573
+  s_466735a13fa48a::t_74173de2733df4 397
+  s_466735a13fa48a::t_5873221ed7ede3 778-781,791-795
+  s_466735a13fa48a::t_0e1da6a2add7d1 430
+  s_466735a13fa48a::t_93d13cefbbb82d 504-510,1141-1148,1175
+  s_466735a13fa48a::t_2161d059e71d19 609-611
+  s_466735a13fa48a::t_5f35e5d2b7cf40 478-503,511-520,523-526
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "66ce311075061341b2aecb552ea23f3db0e7faa3",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
