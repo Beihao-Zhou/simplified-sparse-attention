@@ -1,6 +1,6 @@
 # Handoff: Hierarchical Gist Compression + Selective Unfolding with OPSD (built on SSA)
 
-Nov 19, 2026 · @Someone（Nov 19 更新：设计决定、spike 计划、代码现状；Nov 20 更新：深层树、decode 时的 gist 与 1M 上下文的计划；Nov 21 更新：转向长 agent 轨迹，决策见 ADR 0001）
+Nov 19, 2026 · @Someone（Nov 19 更新：设计决定、spike 计划、代码现状；Nov 20 更新：深层树、decode 时的 gist 与 1M 上下文的计划；Nov 21 更新：转向长 agent 轨迹，决策见 ADR 0001；Nov 24 更新：阶段一实验后的当前结论，见「当前结论（2026-11-24）」）
 
 ## TL;DR 与使用方式
 
@@ -55,7 +55,7 @@ Nov 19, 2026 · @Someone（Nov 19 更新：设计决定、spike 计划、代码�
 
 **梯度在层之间连通，不做逐层 detach。** 梯度落点有一个结构性的不对称：gist 被读的一侧（W<sup>g</sup><sub>K</sub>、W<sup>g</sup><sub>V</sub>、β）在每一层直接收到 MSE 与路由 KL 的梯度；写的一侧（W<sup>g</sup><sub>Q</sub>、W<sup>g</sup><sub>O</sub>，决定 gist 从自己的 chunk 读什么、写回什么）只能从更高层的 loss 经若干层反传收到梯度，最后一层完全没有。因此逐层 detach 会让写的一侧学不到东西；最后一层不建 W<sup>g</sup><sub>Q</sub>、W<sup>g</sup><sub>O</sub>；训练中按参数组（W<sup>g</sup><sub>Q/O</sub>、W<sup>g</sup><sub>K/V</sub>、β、embedding）逐层记录梯度范数，监测写的一侧是否跟得上。只给 gist 专属 K、V 的变体（D-kv）作为 ablation，它与完整方案 D 的差距衡量「学会写」的价值。
 
-**阶段一用局部老师。** 第 ℓ 层的 `o_raw` 用这一层（已被前面各层压缩误差影响的）输入计算，不另跑原模型。逐层误差是否累积，用后缀 logit KL（学生对比原模型）监测；如果出现「逐层 MSE 下降、logit KL 不降」，再加全局老师作为 ablation。现有代码里的 `--klloss` 分支（`gist_qwen2.py:1617-1639`，默认关）就是一种全局老师：batch 复制成 raw mask 与 gist mask 两份完整前向，逐层对 hidden state 做 smooth-L1。它可以作为多 mask batch 写法和全局老师 ablation 的参考实现。
+**阶段一用局部老师。** 第 ℓ 层的 `o_raw` 用这一层（已被前面各层压缩误差影响的）输入计算，不另跑原模型。逐层误差是否累积，用后缀 logit KL（学生对比原模型）监测；如果出现「逐层 MSE 下降、logit KL 不降」，再加全局老师作为 ablation。**（已被 #29、#41 取代：往下传学生的输出、老师也在这条漂移的流上计算时，32K 下会发散；现在老师固定在 base 流上，summary 行往下传 gist mask 下的输出，见「当前结论」。）**现有代码里的 `--klloss` 分支（`gist_qwen2.py:1617-1639`，默认关）就是一种全局老师：batch 复制成 raw mask 与 gist mask 两份完整前向，逐层对 hidden state 做 smooth-L1。它可以作为多 mask batch 写法和全局老师 ablation 的参考实现。
 
 **两级默认同时训练。** 两项 MSE 从第 0 步一起优化；先训 g1 再加 hier 的分阶段做法作为对照，因为 `o_g1` 在训练中一直在变，第二级追的是移动目标。
 
@@ -185,11 +185,36 @@ spike 全部通过后按顺序执行；每一项的验收标准满足后才进�
 
 ## 当前方向：长 agent 轨迹的推理与两阶段训练
 
-目标改为让这套代码支持长 agent 轨迹的推理和两阶段训练，所有结构性决策写在 `docs/adr/0001-long-agent-trajectory-infra.md`，父 issue 是 #16。要点：主线模型换成 Qwen2.5-7B-Instruct-1M，0.5B 做纵向链路与 spike；结构按 1M 设计，质量目标定在 256K（HF 没有 DCA，模型只训练到 256K，DCA 见 #27）；永远可见的原始 token 只有 system、工具定义和最近 2 轮（最多 8K）的滑动窗口；树固定为 4 叉 L = 4；选择改为逐级 beam（每级固定 k，顶层最多 4096 个节点），作为新的 `DECODE_SELECT` 模式与旧路径并存；1M、batch 1 在 H200 上全部放 GPU，原始 KV 下放推迟（#26）。先用 0.5B 在 128K 上打通「片段标签与可见窗口 → 追加 prefill → 新选择规则 → kernel → OPSD」（#17–#21），再换 7B 加长到 256K（#22），所有功能做完后才进入质量测试。
+目标改为让这套代码支持长 agent 轨迹的推理和两阶段训练，所有结构性决策写在 `docs/adr/0001-long-agent-trajectory-infra.md`，父 issue 是 #16。要点：主线模型换成 Qwen2.5-7B-Instruct-1M，0.5B 做纵向链路与 spike；结构按 1M 设计，质量目标定在 256K（HF 没有 DCA，模型只训练到 256K，DCA 见 #27）；永远可见的原始 token 只有 system、工具定义和最近 2 轮（最多 8K）的滑动窗口；树固定为 4 叉 L = 4；选择改为逐级 beam（每级固定 k，顶层最多 4096 个节点；**实际默认是每个 head 各取 top-k 再在 GQA 组内取并集，每组每级 k 到 Gk 个节点再加强制节点，不是固定预算**），作为新的 `DECODE_SELECT` 模式与旧路径并存；1M、batch 1 在 H200 上全部放 GPU，原始 KV 下放推迟（#26）。先用 0.5B 在 128K 上打通「片段标签与可见窗口 → 追加 prefill → 新选择规则 → kernel → OPSD」（#17–#21），再换 7B 加长到 256K（#22），所有功能做完后才进入质量测试。
 
 下一节的第 4 步（位置与老师）和第 5 步（多级 offload）已由 ADR 0001 取代；第 3 步（#14）推迟到质量测试阶段。
 
 **路由标签的变更（2026-11-21 起）。** 此前的路由 KL 把第一个 gist 之前的原始 token 都算进 0 号单元，包括 sink。在 S3 的 L = 2 checkpoint 上（8K），中后层的 sink 占 0 号单元标签的 25–45%，而 sink 永远可见、选它没有意义。现在阶段一和 OPSD 的路由 KL 都排除 sink 和受保护片段（`gist_routing.unit_exclude`）。已训练的 checkpoint 不受影响；`results/spikes.csv` 里 S3、S4b 及之前的路由相关结果都是旧标签下训练的，与之后的 run 比较时要用新标签重训对照组，复现旧结果请 checkout 之前的 commit。
+
+## 当前结论（2026-11-24）
+
+阶段一的 0.5B 实验之后的状态。数字在 `results/spikes.csv`（D29、R35、R34、B41），每项的表格和判定在对应 issue 里。阶段一配置在 #36 重写 ADR 0003 时定稿；在那之前以本节为准。
+
+**已定（有数据）**
+- **summary 行往下一层传 gist mask 下的输出（`--down hybrid`）。** raw 行仍传 raw 输出，所以 raw 流等于 base 模型，老师不会漂移。8K 下 suffix KL 0.049 → 0.023，decode KL 0.213 → 0.147，passkey 前段第一次不为 0。只把老师换成固定的 base 流（D0）没有效果。`--down sel --pairs …:base`（D1）效果相同，seed 1 复核之前不在两者之间选（#41）。
+- **可见集合用 coarse（`--select_coarse`），不用 SG+SR。** 未选中的节点作为粗粒度项留在 softmax 里，每个原始 token 恰好表示一次。step 0 时 coarse 的 KL 0.058，SG+SR 12.1；step 150 时 0.043 vs 0.049（#34）。
+- **λ_route 保持 0.1。** λ = 1 时 KL 0.046 → 0.120（#34 R4）。
+- **每个节点一个路由 key。** 32K 下第 3 级，4 个 key 只比 1 个 key 好 0.01（#35）。
+- **down=raw 不发散，但训的对象不对。** summary 行在训练中读整个前缀，推理时只读它覆盖的内容。hybrid 取代它作为默认（#29、#41）。
+
+**不成立**
+- **训练时每个位置都做选择（`--select_train`）收益很小。** 32K 下同一模式打分，0.148 vs 0.139。之前的 0.247 vs 0.139 是两个 run 评测模式不同（#29）。
+- **free-node 路由损失（`--route_free`）没有帮助**（#34 R3）。
+
+**待定（正在跑）**
+- **routing loss 训练的东西不对。** learned router 的 beam mass 是 0.52（8K）、0.26–0.34（32K），同样参数化直接拟合能到 0.95 和 0.83。R4 的 routing loss 最低，beam mass 却最差（0.32）。假设：true mass 由学生自己的 q 算出，梯度进入 q，loss 可以通过移动 target 来下降。`--route_detach_q` 的 8K 验证在 VM2 上跑（`experiments/route_detach_run.sh`，#34）。
+- **coarse + hybrid 在 32K 是否稳定**（`experiments/gate32h_run.sh`，VM1）。对照 gate32r_B：sel KL 0.139，decode KL 0.582，passkey 0 / 0。
+- **32K 检索不成立。** passkey 前段 0、后段 0–0.33，teacher 1.0 / 0.93。瓶颈是 router（#35）。
+- **7B 阶段二 128K 的 backward 仍然 OOM**（#42）。chunk_mlp 之后 forward 能过，可能还需要整层的 gradient checkpointing。阶段二（#40）等阶段一配置定下来再开始。
+
+**评测时的注意点**
+- 训练日志里的 `suffix_kl` 按 `--select_train` 决定打分模式（有则 sel，无则 hier）。比较不同 run 时，用 `--eval_only` 按同一模式重新打分，或用 `select_gate.py`。
+- 超过 64K 的 full attention 前向要用 `gist_opsd_long.plain_hidden`。torch 2.8 的 mem-efficient SDPA 超过 65535 个位置时会静默出错。
 
 ## 下一阶段：深层树、decode 时的 gist 与 1M 上下文
 
