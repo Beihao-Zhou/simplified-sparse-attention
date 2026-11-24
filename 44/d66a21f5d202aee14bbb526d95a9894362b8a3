@@ -1,0 +1,19 @@
+.gitignore
+  s_cf0998a35b16a4::t_fd1fc9f20f03e9 39-41
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "44d66a21f5d202aee14bbb526d95a9894362b8a3",
+  "prompts": {},
+  "sessions": {
+    "s_cf0998a35b16a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1d2e2796-13fe-4328-8689-39c9771ba4a7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
