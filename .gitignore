@@ -36,3 +36,6 @@ analysis/results/
 
 # Personal Claude Code instructions
 CLAUDE.md
+
+# paper drafts: tracked locally only (own git repo in docs/paper), never pushed
+docs/paper/
