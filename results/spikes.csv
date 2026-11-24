@@ -143,3 +143,11 @@ F31,B_fit4_retr_layers,0,key_hit_8k,0.88,dafab68,2026-11-23
 F31,B_oracle_retr_layers,0,key_hit_8k,0.96,dafab68,2026-11-23
 F31,B_learned_all_layers,0,key_hit_8k,0.358,dafab68,2026-11-23
 F31,B_oracle_all_layers,0,key_hit_8k,0.525,dafab68,2026-11-23
+K39,B_learned_r16,0,key_hit_retr_8k,0.68,487f594,2026-11-23
+K39,B_m1_r16_n40,0,key_hit_retr_8k,0.78,487f594,2026-11-23
+K39,B_m2_r16_n40,0,key_hit_retr_8k,0.81,487f594,2026-11-23
+K39,B_m4_r16_n40,0,key_hit_retr_8k,0.79,487f594,2026-11-23
+K39,B_m1_r64_n80,0,key_hit_retr_8k,0.78,487f594,2026-11-23
+K39,B_m4_r64_n80,0,key_hit_retr_8k,0.77,487f594,2026-11-23
+K39,B_m1_r64_n80,0,flat0_retr_8k,0.819,487f594,2026-11-23
+K39,B_m4_r64_n80,0,flat0_retr_8k,0.831,487f594,2026-11-23
