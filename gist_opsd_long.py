@@ -189,5 +189,20 @@ def teacher_logprobs(plain, ctx_ids, stream, vocab: int) -> torch.Tensor:
     dev = next(plain.parameters()).device
     seq = torch.tensor([raw_ctx + raw_y[:-1]], device=dev)
     # logits of the generated rows only: over a 128K prompt they would take ~77 GB
-    h = plain.model(input_ids=seq).last_hidden_state[0, len(raw_ctx) - 1:]
+    h = plain_hidden(plain, seq, keep_from=len(raw_ctx) - 1)
     return _logprobs(plain.lm_head(h), vocab)
+
+
+def plain_hidden(plain, seq: torch.Tensor, keep_from: int = 0, chunk: int = 16384) -> torch.Tensor:
+    """plain.model's last hidden state [n - keep_from, D] for seq [1, n], prefilled in chunks
+    through a KV cache. torch's memory-efficient SDPA (what HF sdpa falls to here) returns
+    garbage past 65535 positions in one call: on 7B-1M, torch 2.8, NLL 0.22 at 65280 and 15 at
+    66048, and back to 0.22 at 128K chunked."""
+    from transformers import DynamicCache
+
+    cache, hs = DynamicCache(), []
+    for s in range(0, seq.shape[1], chunk):
+        h = plain.model(input_ids=seq[:, s:s + chunk], past_key_values=cache,
+                        use_cache=True).last_hidden_state[0]
+        hs.append(h[max(0, keep_from - s):])
+    return torch.cat(hs)

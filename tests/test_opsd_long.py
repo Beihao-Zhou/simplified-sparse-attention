@@ -131,3 +131,17 @@ def test_gradients_reach_what_was_attended(setup, monkeypatch, coarse):
     sb = [p for n, p in model.named_parameters() if "summary_bias" in n]
     assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in sb)
     model.eval()
+
+
+def test_plain_hidden_chunked_matches_one_call():
+    from transformers import Qwen2ForCausalLM
+
+    torch.manual_seed(0)
+    cfg = Qwen2Config(vocab_size=200, hidden_size=64, intermediate_size=128, num_hidden_layers=2,
+                      num_attention_heads=4, num_key_value_heads=2, max_position_embeddings=512)
+    plain = Qwen2ForCausalLM(cfg).eval()
+    seq = torch.randint(0, 200, (1, 300))
+    with torch.no_grad():
+        ref = plain.model(input_ids=seq).last_hidden_state[0]
+        got = ol.plain_hidden(plain, seq, keep_from=130, chunk=64)
+    torch.testing.assert_close(got, ref[130:], atol=1e-5, rtol=1e-4)

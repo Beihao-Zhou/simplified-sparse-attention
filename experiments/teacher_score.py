@@ -35,9 +35,11 @@ def main():
                                                attn_implementation="sdpa").cuda().eval()
     teacher.config.use_cache = False
     Global_data.gist_token_id = []  # raw text only: nothing to drop
-    ids = datasets.load_from_disk(args.data)[0]["input_ids"]
+    rows = datasets.load_from_disk(args.data)["input_ids"]
     for L in args.lens:
-        assert L + args.n_new <= len(ids), (L, len(ids))
+        # a len262144 bucket holds rows up to 256K, not of it: the first one long enough
+        ids = next((r for r in rows if len(r) >= L + args.n_new), None)
+        assert ids is not None, (L, max(map(len, rows)))
         torch.cuda.reset_peak_memory_stats()
         torch.cuda.synchronize()
         t0 = time.perf_counter()

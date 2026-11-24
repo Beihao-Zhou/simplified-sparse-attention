@@ -24,6 +24,7 @@ from transformers import AutoTokenizer, Qwen2ForCausalLM
 
 import gist_flex_attention
 import gist_resume
+from gist_opsd_long import plain_hidden
 from gist_lora import apply_lora, apply_summary_bias, summary_spans
 from gist_qwen2 import GistQwen2ForCausalLM
 from gist_utils import Global_data, add_gist_tokens
@@ -273,7 +274,7 @@ def suffix_kl(model, teacher, rows, seq_len, args, down):
             hs = model.model(
                 input_ids=ids, attention_mask=torch.ones_like(ids), **seg
             ).last_hidden_state[0][raw_mask]
-            ht = teacher.model(input_ids=raw).last_hidden_state[0]
+            ht = plain_hidden(teacher, raw)  # chunked: one SDPA call breaks past 64K
             for s in range(args.sink, ht.shape[0], 1024):
                 ls = F.log_softmax(teacher.lm_head(hs[s : s + 1024]).float(), -1)
                 lt = F.log_softmax(teacher.lm_head(ht[s : s + 1024]).float(), -1)

@@ -35,8 +35,10 @@ def main():
     tok, model, _, _ = A.load_stage1_flex(args.stage1, args.model)
     Global_data.raw_window, Global_data.window_turns = 8192, 2
     model.eval()
-    row = datasets.load_from_disk(args.data)[0]
+    ds = datasets.load_from_disk(args.data)
     for L in args.lens:
+        # a len262144 bucket holds rows up to 256K: the first one long enough
+        row = ds[next(i for i, n in enumerate(map(len, ds["input_ids"])) if n >= L)]
         for graph in ("1", "0"):
             os.environ["GIST_DECODE_GRAPH"] = graph
             s = GistSession(model)
