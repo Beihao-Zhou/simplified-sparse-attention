@@ -10,7 +10,7 @@ export HF_HOME=/data/hf PYTHONPATH="$(pwd)" PYTORCH_CUDA_ALLOC_CONF=expandable_s
 # with the default tiles (an H200 has 227 KB)
 export GIST_FLEX_KERNEL_OPTIONS=${GIST_FLEX_KERNEL_OPTIONS:-'{"BLOCK_M":64,"BLOCK_N":64,"BLOCK_M1":32,"BLOCK_N1":64,"BLOCK_M2":64,"BLOCK_N2":32,"num_stages":1}'}
 M=${MODEL:-/data/models/Qwen2.5-7B-Instruct-1M}
-A=/data/agent_data E=/data/agent_longeval/len262144
+A=/data/agent_data E=/data/agent_longeval/len1048576  # len262144 rows are all < 256K
 mkdir -p logs runs results
 run() { name=$1; shift
   [ -f logs/$name.done ] && return
