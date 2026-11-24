@@ -267,6 +267,7 @@ def record_base(model, ids, seg):
         Global_data.stage1 = {**st, "base": rec}
 
 
+@torch.no_grad()
 def suffix_kl(model, teacher, rows, seq_len, args, down):
     """Mean reverse KL per raw token past the sink, student (no unfolding) vs base on raw text."""
     gist = torch.tensor(Global_data.gist_token_id)
