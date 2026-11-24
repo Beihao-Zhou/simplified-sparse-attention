@@ -45,7 +45,11 @@ def main():
             torch.cuda.reset_peak_memory_stats()
             torch.cuda.synchronize()
             t_pre = time.perf_counter()
-            s.append(row["input_ids"][:L], row["pinned"][:L], row["turn"][:L])
+            # 32K appends, as turns arrive: one 256K prefill (~340K with summaries) needs
+            # 128 GB of activations on 7B and runs out of memory on an H200
+            for a in range(0, L, 32768):
+                b = min(a + 32768, L)
+                s.append(row["input_ids"][a:b], row["pinned"][a:b], row["turn"][a:b])
             torch.cuda.synchronize()
             t_pre = time.perf_counter() - t_pre
             y = int(model.lm_head(s.last_hidden).argmax())
