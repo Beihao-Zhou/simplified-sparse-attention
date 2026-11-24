@@ -249,3 +249,11 @@ B41,D1_down_sel_base_teacher_step150,0,passkey_back_all_8k,0.67,b5185b3,2026-11-
 R34,R1_sgsr_step150,0,select_gate_all_kl_8k,0.209,8e32bb5,2026-11-24
 R34,R1_sgsr_step150,0,passkey_front_all_8k,0.0,8e32bb5,2026-11-24
 R34,R1_sgsr_step150,0,passkey_back_all_8k,0.4,8e32bb5,2026-11-24
+B41,gate32h_coarse_hybrid_step150,0,suffix_kl_32k,0.0645,f7605f5,2026-11-24
+B41,gate32h_coarse_hybrid_step150,0,select_gate_hier_kl_32k,0.797,f7605f5,2026-11-24
+B41,gate32h_coarse_hybrid_step150,0,select_gate_decode_kl_32k,0.379,f7605f5,2026-11-24
+B41,gate32h_coarse_hybrid_step150,0,select_gate_all_kl_32k,0.359,f7605f5,2026-11-24
+B41,gate32h_coarse_hybrid_step150,0,passkey_front_decode_32k,0.0,f7605f5,2026-11-24
+B41,gate32h_coarse_hybrid_step150,0,passkey_back_decode_32k,0.333,f7605f5,2026-11-24
+B41,gate32h_coarse_hybrid_step150,0,passkey_front_all_32k,0.133,f7605f5,2026-11-24
+B41,gate32h_coarse_hybrid_step150,0,passkey_back_all_32k,0.333,f7605f5,2026-11-24
