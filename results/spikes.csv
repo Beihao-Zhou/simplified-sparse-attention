@@ -151,3 +151,5 @@ K39,B_m1_r64_n80,0,key_hit_retr_8k,0.78,487f594,2026-11-23
 K39,B_m4_r64_n80,0,key_hit_retr_8k,0.77,487f594,2026-11-23
 K39,B_m1_r64_n80,0,flat0_retr_8k,0.819,487f594,2026-11-23
 K39,B_m4_r64_n80,0,flat0_retr_8k,0.831,487f594,2026-11-23
+D29,gate32r_A_down_raw_step100,0,suffix_kl_32k,0.268,deaf4b9,2026-11-23
+D29,gate32r_B_down_raw_step100,0,suffix_kl_32k,0.151,deaf4b9,2026-11-23
