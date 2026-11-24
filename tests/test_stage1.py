@@ -280,6 +280,39 @@ def test_select_mask_full_expansion_is_the_raw_teacher(cfg, k, zero):
         assert last["sel|raw"] > 1e-6, last
 
 
+@pytest.mark.parametrize("k,zero", [((10**6,), True), ((1,), False)])
+def test_base_teacher_is_the_raw_stream(cfg, k, zero):
+    """#41: "base" is the raw stream recorded layer by layer. With every node expanded and
+    coarse terms on, passing sel down reproduces it exactly at every layer; with k = 1 the
+    sel stream drifts from it."""
+    import gist_beam
+    from gist_stage1_trainer import record_base
+
+    cfg._attn_implementation = gist_flex_attention.GIST_FLEX
+    Global_data.train_attn = "flex"
+    Global_data.stage1 = {
+        "pairs": [("sel", "base")],
+        "down": "sel",
+        "lambda_ntp": 0.0,
+        "select": {"cfg": gist_beam.BeamConfig(k=k, coarse=True), "rows_from": 0},
+    }
+    torch.manual_seed(0)
+    model = GistQwen2ForCausalLM(cfg).float().eval()
+    apply_lora(model, "gist", r=4)
+    _randomize_lora(model)
+    ids = _ids(n_raw=300)
+    record_base(model, ids, {})
+    assert len(Global_data.stage1["base"]) >= 2
+    with torch.no_grad():
+        model(input_ids=ids, attention_mask=torch.ones_like(ids), use_cache=False)
+    per_layer = [float(x) for x in Global_data.stage1["losses"]["sel|base"]]
+    assert len(per_layer) == len(Global_data.stage1["base"])
+    if zero:
+        assert max(per_layer) < 1e-10, per_layer
+    else:
+        assert per_layer[-1] > 1e-6, per_layer
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="flex backward needs CUDA")
 @pytest.mark.parametrize("coarse", [False, True])
 @pytest.mark.parametrize("k", [1, 3])

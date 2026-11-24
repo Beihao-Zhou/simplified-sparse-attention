@@ -117,7 +117,7 @@ def prepare_gist_flex(
         out["gist_teacher_masks"] = {
             n: make_block_mask(make_teacher_mask_mod(f, n, kv_perm=perm), B, T, block_size,
                                str(input_ids.device), input_ids.is_cuda)
-            for n in names - {"hier", "sel"}}  # "sel" is built per layer
+            for n in names - {"hier", "sel", "base"}}  # "sel" per layer; "base" recorded
         pos = torch.arange(T, device=input_ids.device)[None]
         out["gist_loss_rows"] = (f.level < 0) & ~f.is_pad & (pos >= f.sink_end[:, None])
         if f.pinned is not None:  # pinned rows see their whole prefix: student = teacher
@@ -372,6 +372,11 @@ def _stage1_attention(module, attend, hier_mask, teacher_masks, rows, st):
     st["pairs"] lists (student, teacher) mask names, e.g. ("g1", "raw"), ("hier", "g1");
     a name that appears only as a teacher is computed without grad. st["down"] is the
     output passed to the next layer. Losses are appended to st["losses"][pair].
+
+    "base" (#41) is a fixed teacher: the output passed down in an earlier no-grad forward
+    with st["record"] set, normally down=raw, i.e. the base model's own stream (raw rows
+    never see summaries, and the adapters act on summary rows only). A student matched to
+    it can be passed down (down=sel) without the moving target of #29.
     """
     masks = {"hier": hier_mask, **teacher_masks}
     students = {s for s, _ in st["pairs"]} | {st["down"]}
@@ -379,7 +384,7 @@ def _stage1_attention(module, attend, hier_mask, teacher_masks, rows, st):
     def run(m):  # a BlockMask, or a function computing the output itself ("sel", #29)
         return m() if callable(m) and not hasattr(m, "kv_num_blocks") else attend(m)
 
-    for name in sorted({n for pair in st["pairs"] for n in pair} | {st["down"]}):
+    for name in sorted(({n for pair in st["pairs"] for n in pair} | {st["down"]}) - {"base"}):
         if name in students:
             outs[name] = run(masks[name])
         else:
@@ -387,6 +392,10 @@ def _stage1_attention(module, attend, hier_mask, teacher_masks, rows, st):
                 outs[name] = run(masks[name])
     B, T = rows.shape
     proj = {n: module.o_proj(o.reshape(B, T, -1)) for n, o in outs.items()}
+    if st.get("record") is not None:
+        st["record"][module.layer_idx] = proj[st["down"]].detach()
+    if "base" in st:
+        proj["base"] = st["base"][module.layer_idx]
     for s_name, t_name in st["pairs"]:
         loss = _rel_mse(proj[s_name], proj[t_name].detach(), rows)
         if _first(st, (module.layer_idx, s_name, t_name)):

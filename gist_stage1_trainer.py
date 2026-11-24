@@ -254,6 +254,19 @@ def batches(ds, seq_len, seed, args):
 
 
 @torch.no_grad()
+def record_base(model, ids, seg):
+    """#41: the "base" teacher of every layer, from a no-grad forward passing raw down (the
+    base model's stream); the training forward then matches its students to it."""
+    st = Global_data.stage1
+    rec = {}
+    Global_data.stage1 = {**st, "pairs": [], "down": "raw", "record": rec, "route_rows": 0}
+    try:
+        with torch.no_grad():
+            model.model(input_ids=ids, attention_mask=torch.ones_like(ids), use_cache=False, **seg)
+    finally:
+        Global_data.stage1 = {**st, "base": rec}
+
+
 def suffix_kl(model, teacher, rows, seq_len, args, down):
     """Mean reverse KL per raw token past the sink, student (no unfolding) vs base on raw text."""
     gist = torch.tensor(Global_data.gist_token_id)
@@ -449,6 +462,8 @@ def main(argv=None):
         agg = {}
         for _ in range(accum):
             ids, labels, seg = next(it)
+            if any(t == "base" for _, t in Global_data.stage1["pairs"]):
+                record_base(model, ids.cuda(), {k: v.cuda() for k, v in seg.items()})
             out = model(
                 input_ids=ids.cuda(),
                 attention_mask=torch.ones_like(ids).cuda(),
