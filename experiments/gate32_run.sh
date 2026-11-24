@@ -12,7 +12,7 @@ mkdir -p logs runs results
 A=/data/agent_data
 COMMON="--data $A --heldout $A --levels 4 --lora gist --beta --lambda_route 0.1
         --raw_window 8192 --window_turns 2 --seq_len 32768 --batch 2 --steps 300
-        --eval_every 50 --eval_rows 4 --eval_len 32768 --seed 0 --save_every 10 --resume"
+        --eval_every 50 --eval_rows 4 --eval_len 32768 --seed 0 --save_every 10 --resume --stop_at ${STOP_AT:-150}"
 train() { name=$1; shift
   [ -f runs/$name/adapters.pt ] && return
   echo "=== $name $(date +%T)"
@@ -26,4 +26,13 @@ echo "=== gate32 eval $(date +%T)"
 python experiments/select_gate.py --ckpts runs/gate32r_A/adapters.pt runs/gate32r_B/adapters.pt \
   --agent $A --len 32768 --raw_window 8192 --window_turns 2 --k 16 \
   --out results/select_gate32r.jsonl >> logs/select_gate32r.log 2>&1 || exit $?
+# #35: route_fit at 32K (passkey contexts: the hit needs a known key; raw window 8K as the
+# agent setting), retrieval layers; stop_at 150 frees the GPU for it, resume to 300 later
+for r in A B; do
+  [ -f results/route32k_fit_$r.done ] && continue
+  python experiments/route_fit.py --ckpt runs/gate32r_$r/adapters.pt --len 32768 \
+    --raw_window 8192 --layers 9 11 13 16 17 --out results/route32k_fit_$r.jsonl \
+    >> logs/route32k_fit.log 2>&1 || exit $?
+  touch results/route32k_fit_$r.done
+done
 echo "=== GATE32 DONE $(date +%T)"
