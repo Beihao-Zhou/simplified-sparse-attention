@@ -13,7 +13,7 @@ mkdir -p logs runs results
 D=~/spike_data
 COMMON="--data $D/cpt_train --heldout $D/cpt_heldout --levels 4 --lora gist --beta --lambda_route 0.1
         --seq_len 8192 --batch 8 --steps 300 --eval_every 100 --eval_rows 8 --eval_len 8192 --seed 0
-        --raw_window 2048 --select_train --select_k 16 --save_every 10 --resume"
+        --raw_window 2048 --select_train --select_k 16 --save_every 10 --resume --stop_at ${STOP_AT:-150}"
 train() { name=$1; shift
   [ -f runs/$name/adapters.pt ] && return
   echo "=== $name $(date +%T)"
