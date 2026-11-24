@@ -206,3 +206,29 @@ def plain_hidden(plain, seq: torch.Tensor, keep_from: int = 0, chunk: int = 1638
                         use_cache=True).last_hidden_state[0]
         hs.append(h[max(0, keep_from - s):])
     return torch.cat(hs)
+
+
+def chunk_mlp(model, chunk: int = 16384) -> None:
+    """#42: run every decoder MLP in sequence chunks of `chunk` rows, each under its own
+    checkpoint when grad is on. At 128K on 7B the replay's backward otherwise rebuilds the
+    gate/up activations of ~160K rows at once (5.6 GB per tensor, out of memory on an H200);
+    plain chunking would still save every chunk's activations for the backward."""
+    from torch.utils.checkpoint import checkpoint
+
+    for layer in model.model.layers:
+        mlp = layer.mlp
+        if getattr(mlp, "_chunked", False):
+            continue
+        full = mlp.forward
+
+        def forward(x, full=full):
+            if x.shape[1] <= chunk:
+                return full(x)
+            if torch.is_grad_enabled():
+                parts = [checkpoint(full, x[:, s:s + chunk], use_reentrant=False)
+                         for s in range(0, x.shape[1], chunk)]
+            else:
+                parts = [full(x[:, s:s + chunk]) for s in range(0, x.shape[1], chunk)]
+            return torch.cat(parts, 1)
+
+        mlp.forward, mlp._chunked = forward, True

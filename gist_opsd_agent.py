@@ -113,8 +113,10 @@ def main(argv=None):
     Global_data.raw_window, Global_data.window_turns = args.raw_window, args.window_turns
     vocab = len(tok)
     model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+    ol.chunk_mlp(model)  # #42: the 128K replay's backward otherwise rebuilds ~160K MLP rows at once
+    # on the CPU between scorings (#42): on the GPU during the replay it costs 15 GB on 7B
     teacher = Qwen2ForCausalLM.from_pretrained(args.model, dtype=torch.bfloat16,
-                                               attn_implementation="sdpa").cuda().eval()
+                                               attn_implementation="sdpa").eval()
     params = [p for k in ("lora_qo", "lora_kv", "embed", "beta") for p in groups[k]]
     opt = torch.optim.AdamW(params, lr=args.lr, weight_decay=0.0)
     sched = torch.optim.lr_scheduler.LambdaLR(
@@ -147,7 +149,10 @@ def main(argv=None):
             stream, lp_roll, recs = ol.rollout(s, model.lm_head(s.last_hidden), args.n_new, vocab, gen)
             del s
             agg["rollout_s"] += (time.time() - t1) / args.batch
+            teacher.cuda()
             lp_t = ol.teacher_logprobs(teacher, ctx[0], stream, vocab)
+            teacher.cpu()
+            torch.cuda.empty_cache()
             model.train()
             lp_s, st = ol.replay(model, *ctx, stream, recs, vocab, route=route_cfg)
             rkl = ol.reverse_kl(lp_s, lp_t).mean()

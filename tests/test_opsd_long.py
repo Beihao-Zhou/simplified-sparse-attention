@@ -145,3 +145,22 @@ def test_plain_hidden_chunked_matches_one_call():
         ref = plain.model(input_ids=seq).last_hidden_state[0]
         got = ol.plain_hidden(plain, seq, keep_from=130, chunk=64)
     torch.testing.assert_close(got, ref[130:], atol=1e-5, rtol=1e-4)
+
+
+def test_chunk_mlp_matches_and_backprops():
+    from transformers import Qwen2ForCausalLM
+
+    torch.manual_seed(0)
+    cfg = Qwen2Config(vocab_size=200, hidden_size=64, intermediate_size=128, num_hidden_layers=2,
+                      num_attention_heads=4, num_key_value_heads=2, max_position_embeddings=512)
+    a = Qwen2ForCausalLM(cfg).double()
+    b = Qwen2ForCausalLM(cfg).double()
+    b.load_state_dict(a.state_dict())
+    ol.chunk_mlp(b, chunk=48)
+    seq = torch.randint(0, 200, (1, 130))
+    ya, yb = (m.model(input_ids=seq).last_hidden_state for m in (a, b))
+    torch.testing.assert_close(yb, ya)
+    ya.pow(2).sum().backward()
+    yb.pow(2).sum().backward()
+    for (n, pa), pb in zip(a.named_parameters(), b.parameters()):
+        torch.testing.assert_close(pb.grad, pa.grad, msg=n)
