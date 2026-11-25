@@ -321,3 +321,15 @@ R34,gate32h_coarse_hybrid_step150_oracle,0,oracle_passkey_front_decode_32k,0.07,
 R34,gate32h_coarse_hybrid_step150_oracle,0,oracle_passkey_back_decode_32k,0.4,44661f1,2026-11-25
 R34,gate32h_coarse_hybrid_step150_oracle,0,oracle_passkey_front_all_32k,0.93,44661f1,2026-11-25
 R34,gate32h_coarse_hybrid_step150_oracle,0,oracle_passkey_back_all_32k,0.87,44661f1,2026-11-25
+B41,gate32hA_coarse_hybrid_noselect_step150,0,select_gate_hier_kl_32k,0.796,75908f3,2026-11-25
+B41,gate32hA_coarse_hybrid_noselect_step150,0,select_gate_decode_kl_32k,0.379,75908f3,2026-11-25
+B41,gate32hA_coarse_hybrid_noselect_step150,0,select_gate_all_kl_32k,0.361,75908f3,2026-11-25
+B41,gate32hA_coarse_hybrid_noselect_step150,0,passkey_front_decode_32k,0.0,75908f3,2026-11-25
+B41,gate32hA_coarse_hybrid_noselect_step150,0,passkey_back_decode_32k,0.333,75908f3,2026-11-25
+B41,gate32hA_coarse_hybrid_noselect_step150,0,passkey_front_all_32k,0.067,75908f3,2026-11-25
+B41,gate32hA_coarse_hybrid_noselect_step150,0,passkey_back_all_32k,0.333,75908f3,2026-11-25
+B41,gate32hA_coarse_hybrid_noselect_step150,0,route_fit_learned_beam_32k_L9-17,0.407,75908f3,2026-11-25
+B41,gate32hA_coarse_hybrid_noselect_step150,0,route_fit_learned_hit_32k_L9-17,0.38,75908f3,2026-11-25
+B41,gate32hA_coarse_hybrid_noselect_step150,0,route_fit_fit1_beam_32k_L9-17,0.867,75908f3,2026-11-25
+B41,gate32hA_coarse_hybrid_noselect_step150,0,sec_per_step_32k,76.6,75908f3,2026-11-25
+B41,gate32h_coarse_hybrid_step150,0,sec_per_step_32k,102.5,f7605f5,2026-11-25
