@@ -315,3 +315,9 @@ B41,ch8_R2H_coarse_hybrid_step150,0,route_fit_learned_beam_8k,0.724,077f22d,2026
 B41,ch8_R2H_coarse_hybrid_step150,0,route_fit_learned_hit_8k,0.33,077f22d,2026-11-25
 B41,ch8_R2H_coarse_hybrid_step150,0,route_fit_fit1_beam_8k,0.947,077f22d,2026-11-25
 B41,ch8_R2H_coarse_hybrid_step150,0,route_fit_nope1_beam_8k,0.736,077f22d,2026-11-25
+R34,gate32h_coarse_hybrid_step150_oracle,0,oracle_decode_kl_32k,0.054,44661f1,2026-11-25
+R34,gate32h_coarse_hybrid_step150_oracle,0,oracle_all_kl_32k,0.009,44661f1,2026-11-25
+R34,gate32h_coarse_hybrid_step150_oracle,0,oracle_passkey_front_decode_32k,0.07,44661f1,2026-11-25
+R34,gate32h_coarse_hybrid_step150_oracle,0,oracle_passkey_back_decode_32k,0.4,44661f1,2026-11-25
+R34,gate32h_coarse_hybrid_step150_oracle,0,oracle_passkey_front_all_32k,0.93,44661f1,2026-11-25
+R34,gate32h_coarse_hybrid_step150_oracle,0,oracle_passkey_back_all_32k,0.87,44661f1,2026-11-25
