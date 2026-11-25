@@ -204,12 +204,13 @@ spike 全部通过后按顺序执行；每一项的验收标准满足后才进�
 
 **不成立**
 - **训练时每个位置都做选择（`--select_train`）收益很小。** 32K 下同一模式打分，0.148 vs 0.139。之前的 0.247 vs 0.139 是两个 run 评测模式不同（#29）。
+- **训练时每个位置都做选择（`--select_train`）在 hybrid 下也没有收益。** 32K 下 decode KL 都是 0.379，每步慢 34%（gate32hA vs gate32h）。ADR 0003 已修订（#36）。
 - **free-node 路由损失（`--route_free`）没有帮助**（#34 R3）。
 - **把 q 从路由损失里 detach（`--route_detach_q`）没有帮助。** λ = 0.1 时 8K 和 32K 都与不加相同（beam 0.52 / 0.52，0.44 / 0.43）。λ = 1 时 beam 0.32 → 0.37，仍不如 λ = 0.1（#34）。router 学不好的主要原因是 raw 下它打分的 summary 与推理时不同，hybrid 修掉了大部分。
 
 **待定（正在跑）**
-- **32K 的差距是不是 router 造成的。** gate32h（coarse + hybrid，32K）稳定：suffix KL 0.064，decode KL 0.379（gate32r_B 0.582）。learned beam 0.44，直接拟合 0.85，passkey 前段仍为 0。`experiments/oracle32h_run.sh` 用真实 mass 选择重跑同一评测：oracle 的 KL 远低于 0.379，就先补 router（候选蒸馏）；接近，就是 summary 本身的问题。
-- **hybrid 下 `--select_train` 是否还值得。** 它让每步慢一倍。raw 下 32K 只差 0.148 vs 0.139，hybrid 下还没有不带它的 32K 对照。ADR 0003 的修订（#36）等这个结果。
+- **（已答：是）32K 的差距是不是 router 造成的。** gate32h（coarse + hybrid，32K）稳定：suffix KL 0.064，decode KL 0.379（gate32r_B 0.582）。learned beam 0.44，直接拟合 0.85，passkey 前段仍为 0。`experiments/oracle32h_run.sh` 用真实 mass 选择重跑同一评测：oracle 的 KL 远低于 0.379，就先补 router（候选蒸馏）；接近，就是 summary 本身的问题。
+- **router 的训练目标。** oracle 选择下 gate32h 的 decode KL 0.379 → 0.054，passkey 0.13 → 0.93，32K 的差距几乎全在 router。routing KL 改为只比 oracle top-16 父节点的子节点（`--route_scope oracle_children`，decode 比较的范围），8K 在 VM2 上跑（`experiments/route_oc8k_run.sh`，#34）。
 - **7B 阶段二 128K 的 backward 仍然 OOM**（#42）。chunk_mlp 之后 forward 能过，可能还需要整层的 gradient checkpointing。阶段二（#40）等阶段一配置定下来再开始。
 
 **评测时的注意点**
