@@ -191,12 +191,12 @@ spike 全部通过后按顺序执行；每一项的验收标准满足后才进�
 
 **路由标签的变更（2026-11-21 起）。** 此前的路由 KL 把第一个 gist 之前的原始 token 都算进 0 号单元，包括 sink。在 S3 的 L = 2 checkpoint 上（8K），中后层的 sink 占 0 号单元标签的 25–45%，而 sink 永远可见、选它没有意义。现在阶段一和 OPSD 的路由 KL 都排除 sink 和受保护片段（`gist_routing.unit_exclude`）。已训练的 checkpoint 不受影响；`results/spikes.csv` 里 S3、S4b 及之前的路由相关结果都是旧标签下训练的，与之后的 run 比较时要用新标签重训对照组，复现旧结果请 checkout 之前的 commit。
 
-## 当前结论（2026-11-24）
+## 当前结论（2026-11-25）
 
 阶段一的 0.5B 实验之后的状态。数字在 `results/spikes.csv`（D29、R35、R34、B41），每项的表格和判定在对应 issue 里。阶段一配置在 #36 重写 ADR 0003 时定稿；在那之前以本节为准。
 
 **已定（有数据）**
-- **summary 行往下一层传 gist mask 下的输出（`--down hybrid`）。** raw 行仍传 raw 输出，所以 raw 流等于 base 模型，老师不会漂移。8K 下 suffix KL 0.049 → 0.023，decode KL 0.213 → 0.147，passkey 前段第一次不为 0。只把老师换成固定的 base 流（D0）没有效果。`--down sel --pairs …:base`（D1）效果相同，seed 1 复核之前不在两者之间选（#41）。
+- **summary 行往下一层传 gist mask 下的输出（`--down hybrid`）。** raw 行仍传 raw 输出，所以 raw 流等于 base 模型，老师不会漂移。8K 下 suffix KL 0.049 → 0.023，decode KL 0.213 → 0.147，passkey 前段第一次不为 0。只把老师换成固定的 base 流（D0）没有效果。seed 1 复现（step 100：0.050 → 0.027）。在 coarse 上单独加 hybrid（ch8_R2H）也一样：suffix KL 0.043 → 0.021，decode KL 0.203 → 0.137，learned router 的 beam mass 0.52 → 0.72（#41）。`--down sel --pairs …:base`（D1）效果相近，取 hybrid，因为它不需要另存 base 流。
 - **可见集合用 coarse（`--select_coarse`），不用 SG+SR。** 未选中的节点作为粗粒度项留在 softmax 里，每个原始 token 恰好表示一次。step 0 时 coarse 的 KL 0.058，SG+SR 12.1；step 150 时 0.043 vs 0.049（#34）。
 - **λ_route 保持 0.1。** λ = 1 时 KL 0.046 → 0.120（#34 R4）。
 - **每个节点一个路由 key。** 32K 下第 3 级，4 个 key 只比 1 个 key 好 0.01（#35）。
@@ -205,11 +205,11 @@ spike 全部通过后按顺序执行；每一项的验收标准满足后才进�
 **不成立**
 - **训练时每个位置都做选择（`--select_train`）收益很小。** 32K 下同一模式打分，0.148 vs 0.139。之前的 0.247 vs 0.139 是两个 run 评测模式不同（#29）。
 - **free-node 路由损失（`--route_free`）没有帮助**（#34 R3）。
+- **把 q 从路由损失里 detach（`--route_detach_q`）没有帮助。** λ = 0.1 时 8K 和 32K 都与不加相同（beam 0.52 / 0.52，0.44 / 0.43）。λ = 1 时 beam 0.32 → 0.37，仍不如 λ = 0.1（#34）。router 学不好的主要原因是 raw 下它打分的 summary 与推理时不同，hybrid 修掉了大部分。
 
 **待定（正在跑）**
-- **routing loss 训练的东西不对。** learned router 的 beam mass 是 0.52（8K）、0.26–0.34（32K），同样参数化直接拟合能到 0.95 和 0.83。R4 的 routing loss 最低，beam mass 却最差（0.32）。假设：true mass 由学生自己的 q 算出，梯度进入 q，loss 可以通过移动 target 来下降。`--route_detach_q` 的 8K 验证在 VM2 上跑（`experiments/route_detach_run.sh`，#34）。
-- **coarse + hybrid 在 32K 是否稳定**（`experiments/gate32h_run.sh`，VM1）。对照 gate32r_B：sel KL 0.139，decode KL 0.582，passkey 0 / 0。
-- **32K 检索不成立。** passkey 前段 0、后段 0–0.33，teacher 1.0 / 0.93。瓶颈是 router（#35）。
+- **32K 的差距是不是 router 造成的。** gate32h（coarse + hybrid，32K）稳定：suffix KL 0.064，decode KL 0.379（gate32r_B 0.582）。learned beam 0.44，直接拟合 0.85，passkey 前段仍为 0。`experiments/oracle32h_run.sh` 用真实 mass 选择重跑同一评测：oracle 的 KL 远低于 0.379，就先补 router（候选蒸馏）；接近，就是 summary 本身的问题。
+- **hybrid 下 `--select_train` 是否还值得。** 它让每步慢一倍。raw 下 32K 只差 0.148 vs 0.139，hybrid 下还没有不带它的 32K 对照。ADR 0003 的修订（#36）等这个结果。
 - **7B 阶段二 128K 的 backward 仍然 OOM**（#42）。chunk_mlp 之后 forward 能过，可能还需要整层的 gradient checkpointing。阶段二（#40）等阶段一配置定下来再开始。
 
 **评测时的注意点**
