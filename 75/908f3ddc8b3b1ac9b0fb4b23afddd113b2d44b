@@ -1,0 +1,19 @@
+experiments/gate32hA_run.sh
+  s_466735a13fa48a::t_23735f7291c5e0 1-28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "75908f3ddc8b3b1ac9b0fb4b23afddd113b2d44b",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
