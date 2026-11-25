@@ -303,3 +303,15 @@ R34,rd_D10_coarse_detach_l1_step150,0,passkey_back_all_8k,0.27,4a5f8ef,2026-11-2
 R34,rd_D10_coarse_detach_l1_step150,0,route_fit_learned_beam_8k,0.37,4a5f8ef,2026-11-25
 R34,rd_D10_coarse_detach_l1_step150,0,route_fit_learned_hit_8k,0.23,4a5f8ef,2026-11-25
 R34,rd_D10_coarse_detach_l1_step150,0,route_fit_fit1_beam_8k,0.941,4a5f8ef,2026-11-25
+B41,ch8_R2H_coarse_hybrid_step150,0,suffix_kl_8k,0.021,077f22d,2026-11-25
+B41,ch8_R2H_coarse_hybrid_step150,0,select_gate_hier_kl_8k,0.249,077f22d,2026-11-25
+B41,ch8_R2H_coarse_hybrid_step150,0,select_gate_decode_kl_8k,0.137,077f22d,2026-11-25
+B41,ch8_R2H_coarse_hybrid_step150,0,select_gate_all_kl_8k,0.131,077f22d,2026-11-25
+B41,ch8_R2H_coarse_hybrid_step150,0,passkey_front_decode_8k,0.13,077f22d,2026-11-25
+B41,ch8_R2H_coarse_hybrid_step150,0,passkey_back_decode_8k,0.4,077f22d,2026-11-25
+B41,ch8_R2H_coarse_hybrid_step150,0,passkey_front_all_8k,0.27,077f22d,2026-11-25
+B41,ch8_R2H_coarse_hybrid_step150,0,passkey_back_all_8k,0.47,077f22d,2026-11-25
+B41,ch8_R2H_coarse_hybrid_step150,0,route_fit_learned_beam_8k,0.724,077f22d,2026-11-25
+B41,ch8_R2H_coarse_hybrid_step150,0,route_fit_learned_hit_8k,0.33,077f22d,2026-11-25
+B41,ch8_R2H_coarse_hybrid_step150,0,route_fit_fit1_beam_8k,0.947,077f22d,2026-11-25
+B41,ch8_R2H_coarse_hybrid_step150,0,route_fit_nope1_beam_8k,0.736,077f22d,2026-11-25
