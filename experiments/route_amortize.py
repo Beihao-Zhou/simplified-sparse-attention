@@ -33,6 +33,7 @@ import experiments.deep_recall as dr  # noqa: E402
 import gist_beam as gb  # noqa: E402
 from experiments.route_fit import NEG, leaf_mass, score  # noqa: E402
 from experiments.select_gate import gist  # noqa: E402
+from gist_route import RouteCore, children_mean, rope  # noqa: E402
 from gist_utils import Global_data  # noqa: E402
 
 
@@ -88,27 +89,9 @@ def collect(model, tok, recorder, docs, args, reps, layers, n_q, scaling):
                     groups.append({"q": q, "mass": mass, "k": [K[gi][gp] for gp in tree.gpos],
                                    "b": [b[gp] for gp in tree.gpos]})
                 per_layer[layer] = groups
-            # kids[l][layer]: mean x of each node's children (level l-1 summaries; raw tokens
-            # for leaves), also known at prefill, so a key built from it can be stored per node
-            comp = tree.compressible & (tree.leaf >= 0) & (tree.leaf < tree.gpos[0].numel())
-            kids = []
-            for lv in range(L):
-                kd = {}
-                for layer in layers:
-                    xl = recorder.x[layer]
-                    if lv == 0:
-                        src, par = xl[comp], tree.leaf[comp]
-                    else:
-                        src = xl[tree.gpos[lv - 1]]
-                        par = torch.arange(src.shape[0], device=ids.device) // cfg_fanout
-                    G = tree.gpos[lv].numel()
-                    keep = par < G
-                    s = torch.zeros(G, src.shape[1], device=ids.device).index_add_(
-                        0, par[keep], src[keep])
-                    n = torch.zeros(G, device=ids.device).index_add_(
-                        0, par[keep], torch.ones_like(par[keep], dtype=torch.float))
-                    kd[layer] = s / n.clamp_min(1)[:, None]
-                kids.append(kd)
+            # kids[l][layer]: mean x of each node's children (gist_route.children_mean)
+            cm = {layer: children_mean(recorder.x[layer], tree, cfg_fanout) for layer in layers}
+            kids = [{layer: cm[layer][lv] for layer in layers} for lv in range(L)]
             out.append({"tree": tree, "rows": rows, "free": free, "n_ret": ret.numel(),
                         "key_leaf": key_leaf, "layers": per_layer, "depth": depth, "rep": rep,
                         "kids": kids,
@@ -139,33 +122,22 @@ class RouteKey(torch.nn.Module):
 
 
 class RouteMLP(torch.nn.Module):
-    """Non-linear routing key: h = gelu(W1 f + b1), m delta keys RoPE(B_j h), delta bias
-    v . h + c[l]; score logsumexp_j q . (k_gist + dk_j) (route_fit's fit{m} form). f is x ("mlp")
-    or [x, mean x of the node's children] ("mlp_kids"). v, c start at 0, and B too for m = 1
-    (step 0 is then the learned router); for m > 1 B starts small and random, since identical
-    keys under logsumexp get identical gradients and never separate."""
+    """gist_route.RouteCore scored on a collected context (f: x, or x and the children's
+    mean x for mlp_kids)."""
 
     def __init__(self, hidden, d, r, levels, kids, m=1):
         super().__init__()
-        self.kids = kids
-        f = hidden * (2 if kids else 1)
-        self.norm = torch.nn.LayerNorm(f)
-        self.W1 = torch.nn.Linear(f, r)
-        self.B = torch.nn.Parameter(torch.zeros(m, d, r) if m == 1 else 0.01 * torch.randn(m, d, r))
-        self.v = torch.nn.Parameter(torch.zeros(r))
-        self.c = torch.nn.Parameter(torch.zeros(levels))
+        self.core = RouteCore(hidden, d, r, levels, kids, m)
 
     def scores(self, ctx, layer, gi, l, scaling):
         grp = ctx["layers"][layer][gi]
         f = ctx["x"][l][layer]
-        if self.kids:
+        if self.core.kids:
             f = torch.cat([f, ctx["kids"][l][layer]], -1)
-        h = torch.nn.functional.gelu(self.W1(self.norm(f)))              # [G, r]
-        dk = torch.einsum("gr,mdr->gmd", h, self.B)                       # [G, m, d]
-        cos, sin = ctx["cos"][l][:, None], ctx["sin"][l][:, None]
-        dk = dk * cos + rotate_half(dk) * sin
-        b = grp["b"][l] + self.c[l] + h @ self.v
-        return score(grp["q"], grp["k"][l][:, None] + dk, b, scaling)
+        lvl = torch.full((f.shape[0],), l, device=f.device, dtype=torch.long)
+        dk, db = self.core(f, lvl)
+        dk = rope(dk, ctx["cos"][l], ctx["sin"][l])
+        return score(grp["q"], grp["k"][l][:, None] + dk, grp["b"][l] + db, scaling)
 
 
 def make_router(name, hidden, d, levels):
@@ -225,6 +197,7 @@ def main():
     ap.add_argument("--routers", nargs="+", default=["linear_r8", "linear_r64"],
                     help="linear_r{r} | mlp_r{r} | mlp_kids_r{r}")
     ap.add_argument("--wd", type=float, default=0.0)
+    ap.add_argument("--save", help="write the last --routers entry (mlp*) as gist_route heads")
     ap.add_argument("--steps", type=int, default=1500)
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--raw_window", type=int, default=0)
@@ -251,6 +224,7 @@ def main():
     d = hidden // model.config.num_attention_heads
     L = train[0]["tree"].num_levels
     out = open(args.out, "w")
+    saved = {"layers": {}}
 
     def write(rec):
         out.write(json.dumps(rec) + "\n")
@@ -281,10 +255,18 @@ def main():
                                lambda c, l: rk.scores(c, layer, gi, l, scaling), cfg, scaling)
                 tr = evaluate(train[:5], layer, gi,
                               lambda c, l: rk.scores(c, layer, gi, l, scaling), cfg, scaling)
+                if args.save and name == args.routers[-1]:
+                    c = rk.core
+                    saved["config"] = {"hidden": hidden, "d": d, "r": c.W1.out_features,
+                                       "levels": L, "kids": c.kids, "m": c.m}
+                    saved["layers"].setdefault(layer, []).append(
+                        {k: v.detach().cpu() for k, v in c.state_dict().items()})
                 write({"ckpt": args.ckpt, "layer": layer, "group": gi, "model": name,
                        "beam": sum(x["beam"] for x in res) / len(res),
                        "beam_train": sum(x["beam"] for x in tr) / len(tr),
                        "hit": [x["hit"] for x in res], "final_loss": float(loss)})
+    if args.save:
+        torch.save(saved, args.save)
 
 
 if __name__ == "__main__":

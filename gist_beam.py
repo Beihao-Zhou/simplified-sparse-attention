@@ -159,7 +159,8 @@ def select(tree: Tree, q: torch.Tensor, k_keys: torch.Tensor, beta: Optional[tor
            rows: torch.Tensor, cfg: BeamConfig, scaling: float, prev_chunks: int = 1,
            raw_window: int = 0, window_turns: int = 0,
            scores: Optional[List[torch.Tensor]] = None) -> Selection:
-    """One KV group. q [h, n, d] at positions rows [n], k_keys [T, d], beta [T] or None.
+    """One KV group. q [h, n, d] at positions rows [n], k_keys [T, d] (or [T, m, d]: m
+    routing keys per node, gist_route.py; not with cfg.oracle), beta [T] or None.
     scores: per level [n, h, G_l], used in place of the summary scores (route_fit.py)."""
     lo = _forced_leaf_lo(tree, rows, prev_chunks, raw_window, window_turns)
     L = tree.num_levels
@@ -175,8 +176,12 @@ def select(tree: Tree, q: torch.Tensor, k_keys: torch.Tensor, beta: Optional[tor
         elif mass is not None:                                    # log mass: union / sumexp
             s = mass[l].clamp(min=1e-30).log()                    # rank as for the logits
         else:
-            gk = k_keys[tree.gpos[l]]                             # [G, d]
-            s = torch.einsum("hnd,gd->nhg", q.float(), gk.float()) * scaling
+            gk = k_keys[tree.gpos[l]]                             # [G, d] or [G, m, d]
+            if gk.dim() == 3:  # m routing keys per node (gist_route.py): logsumexp
+                s = (torch.einsum("hnd,gmd->nhgm", q.float(), gk.float()) * scaling
+                     ).logsumexp(-1)
+            else:
+                s = torch.einsum("hnd,gd->nhg", q.float(), gk.float()) * scaling
             if beta is not None:
                 s = s + beta[tree.gpos[l]].float()[None, None, :]
         sel[l] = f | _pick(s, c & ~f, cfg.k_at(l), cfg.merge)

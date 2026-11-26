@@ -258,15 +258,20 @@ def gist_flex_attention_forward(
         return attend(gist_block_mask), None
     teacher_masks = kwargs["gist_teacher_masks"]
     names = {n for pair in st["pairs"] for n in pair} | down_masks(st)
+    if "sel" in names:  # a decoupled route head (gist_route.py, #34) ranks; attention does not
+        from gist_route import selection_inputs
+        sel_key, sel_beta = selection_inputs(module, key_orig, beta, kwargs["gist_input_ids"],
+                                             kwargs["gist_features"])
     if "sel" in names and st["select"].get("impl") == "dense":  # [T, T] mask: <= ~32K, tests
         teacher_masks = {**teacher_masks, "sel": _select_block_mask(
-            query, key_orig, beta, kwargs, st["select"], gist_kv_perm, scaling)}
+            query, sel_key, sel_beta, kwargs, st["select"], gist_kv_perm, scaling)}
     elif "sel" in names:  # flex over S + gather over X, merged (gist_select_train.py, #29)
         from gist_select_train import select_attention
         teacher_masks = {**teacher_masks, "sel": lambda: select_attention(
             _flex(query.device), q_in, k_att, v_att, gqa, score_mod, query, key_orig, value_orig,
             None if beta is None else beta.float(), kwargs, st["select"], gist_kv_perm, scaling,
-            _kernel_options())}
+            _kernel_options(), sel_key=sel_key,
+            sel_beta=None if sel_beta is None else sel_beta.float())}
     out = _stage1_attention(module, attend, gist_block_mask, teacher_masks,
                             kwargs["gist_loss_rows"], st, kwargs["gist_features"].level >= 0)
     if st.get("route_rows", 0) > 0 and module.layer_idx > 0:

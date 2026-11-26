@@ -21,7 +21,6 @@ selection carries no gradient. `select_attention` here is the PyTorch reference 
 gather part; its result equals the dense "sel" mask of gist_flex_attention.
 """
 
-from typing import Optional
 
 import torch
 
@@ -148,12 +147,16 @@ _CACHE = {"f": None, "key": None, "val": None}
 
 
 def select_attention(flex, q_in, k_att, v_att, gqa, score_mod, query, key, value, beta,
-                     kwargs, sel, perm, scaling, kernel_options=None, chunk: int = 1024):
+                     kwargs, sel, perm, scaling, kernel_options=None, chunk: int = 1024,
+                     sel_key=None, sel_beta=None):
     """The "sel" student, [B, T, H, d] as gist_flex_attention's attend returns.
 
     q_in / k_att / v_att: flex's inputs (keys in perm order, with score_mod adding beta);
     query [B, H, T, d], key / value [B, H_kv, T, d] and beta [B, H_kv, T] in the original
-    order, for the gather part."""
+    order, for the gather part. sel_key / sel_beta: what the selection ranks with instead
+    (gist_route.py, #34; sel_key [B, H_kv, T, m, d] takes the PyTorch reference)."""
+    if sel_key is None:
+        sel_key, sel_beta = key, beta
     from src.data.gist_flex_mask import make_block_mask
 
     f, ids = kwargs["gist_features"], kwargs["gist_input_ids"]
@@ -180,7 +183,8 @@ def select_attention(flex, q_in, k_att, v_att, gqa, score_mod, query, key, value
     lse_x = torch.full_like(lse_s, float("-inf"), dtype=torch.float32)
     import os
     # the oracle (#31) scores by true attention mass: the PyTorch reference only
-    triton_path = query.is_cuda and os.environ.get("GIST_SEL_REF", "0") != "1" and not cfg.oracle
+    triton_path = (query.is_cuda and os.environ.get("GIST_SEL_REF", "0") != "1"
+                   and not cfg.oracle and sel_key.dim() == 4)
     for b in range(B):
         rows_all = torch.nonzero(sel_rows[b]).flatten()
         if rows_all.numel() == 0:
@@ -188,8 +192,9 @@ def select_attention(flex, q_in, k_att, v_att, gqa, score_mod, query, key, value
         if triton_path:  # selection and gather in one kernel each, over all selecting rows
             from kernels.gather_attn import gather_attention as gather_kernel
             from kernels.select_rows import select_lists
-            idx = select_lists(trees[b], los[b], rows_all, query[b].detach(), key[b].detach(),
-                               None if beta is None else beta[b].detach(), cfg, scaling)
+            idx = select_lists(trees[b], los[b], rows_all, query[b].detach(),
+                               sel_key[b].detach(),
+                               None if sel_beta is None else sel_beta[b].detach(), cfg, scaling)
             o, lse = gather_kernel(query[b], key[b], value[b],
                                    None if beta is None else beta[b].float(), rows_all,
                                    idx.int(), scaling)
@@ -199,11 +204,11 @@ def select_attention(flex, q_in, k_att, v_att, gqa, score_mod, query, key, value
         for g in range(H_kv):
             hs = slice(g * hpg, (g + 1) * hpg)
             bg = None if beta is None else beta[b, g]
+            sb = None if sel_beta is None else sel_beta[b, g].detach()
             for i in range(0, rows_all.numel(), chunk):
                 rows = rows_all[i:i + chunk]
                 idx = selected_lists(trees[b], los[b], rows, query[b, hs][:, rows].detach(),
-                                     key[b, g].detach(), None if bg is None else bg.detach(),
-                                     cfg, scaling)
+                                     sel_key[b, g].detach(), sb, cfg, scaling)
                 o, lse = gather_attention(query[b, hs][:, rows], key[b, g], value[b, g], bg,
                                           idx, scaling)
                 o_x[b, hs, rows] = o
