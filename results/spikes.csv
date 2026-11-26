@@ -388,3 +388,15 @@ R34,route_amortize_oc_L1_r8_6000steps_lr3e-3,0,beam_8k_heldout,0.790,1bd1ffb,202
 R34,route_amortize_oc_L1_r8_6000steps_lr3e-3,0,beam_8k_train,0.805,1bd1ffb,2026-11-26
 R34,route_amortize_oc_L1_r64_6000steps_lr3e-3,0,beam_8k_heldout,0.792,1bd1ffb,2026-11-26
 R34,route_amortize_oc_L1_r64_6000steps_lr3e-3,0,beam_8k_train,0.812,1bd1ffb,2026-11-26
+R34,oc_L1_k16_32_decode,0,kl_8k,0.088,aede891,2026-11-26
+R34,oc_L1_k16_32_decode,0,passkey_front,0.40,aede891,2026-11-26
+R34,oc_L1_k16_32_decode,0,passkey_back,0.47,aede891,2026-11-26
+R34,oc_L1_k16_32_all,0,kl_8k,0.067,aede891,2026-11-26
+R34,oc_L1_k16_32_all,0,passkey_front,0.60,aede891,2026-11-26
+R34,oc_L1_k16_32_all,0,passkey_back,0.80,aede891,2026-11-26
+R34,oc_L1_k16_48_decode,0,kl_8k,0.072,aede891,2026-11-26
+R34,oc_L1_k16_48_decode,0,passkey_front,0.33,aede891,2026-11-26
+R34,oc_L1_k16_48_decode,0,passkey_back,0.53,aede891,2026-11-26
+R34,oc_L1_k16_48_all,0,kl_8k,0.053,aede891,2026-11-26
+R34,oc_L1_k16_48_all,0,passkey_front,0.67,aede891,2026-11-26
+R34,oc_L1_k16_48_all,0,passkey_back,0.80,aede891,2026-11-26
