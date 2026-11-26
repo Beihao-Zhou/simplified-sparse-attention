@@ -418,3 +418,10 @@ R34,gate32h_k48_decode,0,passkey_back,0.33,aede891,2026-11-26
 R34,gate32h_k48_all,0,kl_32k,0.135,aede891,2026-11-26
 R34,gate32h_k48_all,0,passkey_front,0.27,aede891,2026-11-26
 R34,gate32h_k48_all,0,passkey_back,0.33,aede891,2026-11-26
+R34,route_amortize_gate32h_learned,0,beam_32k_heldout,0.470,e35ac36,2026-11-26
+R34,route_amortize_gate32h_linear_r64,0,beam_32k_heldout,0.498,e35ac36,2026-11-26
+R34,route_amortize_gate32h_linear_r64,0,beam_32k_train,0.544,e35ac36,2026-11-26
+R34,route_amortize_gate32h_mlp_r256,0,beam_32k_heldout,0.546,e35ac36,2026-11-26
+R34,route_amortize_gate32h_mlp_r256,0,beam_32k_train,0.599,e35ac36,2026-11-26
+R34,route_amortize_gate32h_mlp_kids_r256,0,beam_32k_heldout,0.615,e35ac36,2026-11-26
+R34,route_amortize_gate32h_mlp_kids_r256,0,beam_32k_train,0.661,e35ac36,2026-11-26
