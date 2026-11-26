@@ -79,6 +79,8 @@ def main():
                     help="score nodes by true attention mass instead of summaries (#31)")
     ap.add_argument("--modes", nargs="+", default=["hier", "decode", "all"])
     ap.add_argument("--out", required=True)
+    ap.add_argument("--route_heads", help="gist_route heads (route_amortize.py --save) for the "
+                    "selection to rank with, one file or several (their layers merged)", nargs="+")
     ap.add_argument("--agent", help="experiments/agent_data.py output: the KL rows are held-out "
                     "trajectories (pinned prefix and turns kept) and their text fills the passkey")
     ap.add_argument("--raw_window", type=int, default=0)
@@ -94,6 +96,11 @@ def main():
     out = open(args.out, "a")
     for ck in args.ckpts:
         tok, model, L = dr.load(ck, args.model)
+        if args.route_heads:
+            from gist_route import attach_route_heads
+            saved = [torch.load(p, weights_only=False) for p in args.route_heads]
+            attach_route_heads(model, {"config": saved[0]["config"], "layers": {
+                k: v for sv in saved for k, v in sv["layers"].items()}})
         if teacher is None:
             teacher = Qwen2ForCausalLM.from_pretrained(args.model, dtype=torch.bfloat16).cuda().eval()
         Global_data.raw_window, Global_data.window_turns = args.raw_window, args.window_turns
@@ -155,7 +162,7 @@ def main():
                 pred = teacher.lm_head(hs).argmax(-1).tolist()
                 hits["front" if depth < 0.5 else "back"].append(float(pred == ans))
             rec = {"ckpt": ck, "mode": mode, "k": args.k, "merge": args.merge, "coarse": args.coarse,
-                   "oracle": args.oracle, "len": args.len, "tail": args.tail, "kl": sum(kls) / len(kls) if kls else 0.0,
+                   "oracle": args.oracle, "route_heads": args.route_heads, "len": args.len, "tail": args.tail, "kl": sum(kls) / len(kls) if kls else 0.0,
                    "passkey_front": sum(hits["front"]) / len(hits["front"]),
                    "passkey_back": sum(hits["back"]) / len(hits["back"]), "n_kl": len(kls),
                    "n_passkey": len(ctxs)}

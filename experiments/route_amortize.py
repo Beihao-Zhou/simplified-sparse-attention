@@ -86,7 +86,9 @@ def collect(model, tok, recorder, docs, args, reps, layers, n_q, scaling):
                     q = Q[gi * hpg:(gi + 1) * hpg]
                     mass = gb.oracle_mass(tree, q, K[gi], rows, scaling, cfg_fanout)
                     b = torch.zeros(T, device=ids.device) if beta is None else beta[gi]
-                    groups.append({"q": q, "mass": mass, "k": [K[gi][gp] for gp in tree.gpos],
+                    # bf16: the mass is most of a context's memory (~2 GB at 32K in fp32)
+                    groups.append({"q": q, "mass": [m.bfloat16() for m in mass],
+                                   "k": [K[gi][gp] for gp in tree.gpos],
                                    "b": [b[gp] for gp in tree.gpos]})
                 per_layer[layer] = groups
             # kids[l][layer]: mean x of each node's children (gist_route.children_mean)
@@ -152,7 +154,7 @@ def make_router(name, hidden, d, levels):
 
 
 def ce(s, mass, free):
-    tgt = mass * free[:, None]
+    tgt = mass.float() * free[:, None]
     tot = tgt.sum(-1, keepdim=True)
     ok = tot[..., 0] > 0
     s = s.masked_fill(~free[:, None], NEG)
@@ -168,12 +170,12 @@ def evaluate(ctxs, layer, gi, model_fn, cfg, scaling):
         with torch.no_grad():
             sc = [model_fn(ctx, l) if model_fn else
                   score(grp["q"], grp["k"][l][:, None], grp["b"][l], scaling) for l in range(L)]
-            orc = [grp["mass"][l].clamp(min=1e-30).log() for l in range(L)]
+            orc = [grp["mass"][l].float().clamp(min=1e-30).log() for l in range(L)]
             kw = dict(raw_window=Global_data.raw_window)
             s_sel = gb.select(tree, grp["q"], None, None, rows, cfg, scaling, scores=sc, **kw)
             o_sel = gb.select(tree, grp["q"], None, None, rows, cfg, scaling, scores=orc, **kw)
-            best = leaf_mass(o_sel.sel[0], free[0], grp["mass"][0]).clamp_min(1e-30)
-            got = leaf_mass(s_sel.sel[0], free[0], grp["mass"][0])
+            best = leaf_mass(o_sel.sel[0], free[0], grp["mass"][0].float()).clamp_min(1e-30)
+            got = leaf_mass(s_sel.sel[0], free[0], grp["mass"][0].float())
             hit = None
             if ctx["key_leaf"].numel():
                 hit = bool(s_sel.sel[0][-ctx["n_ret"]:][:, ctx["key_leaf"]].any(-1).any())
