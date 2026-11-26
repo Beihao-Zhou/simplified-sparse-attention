@@ -12,7 +12,11 @@ mkdir -p logs results
     --steps 6000 --lr 3e-3 --out results/route_amortize_oc_L1_long.jsonl \
     > logs/route_amortize_long.log 2>&1 || exit $?
   touch results/route_amortize_oc_L1_long.done; }
-python experiments/select_gate.py --ckpts runs/oc_L1/adapters.pt --k 16 24 32 48 \
-  --raw_window 2048 --coarse --modes decode all --out results/route_budget8k.jsonl \
-  >> logs/route_budget8k.log 2>&1 || exit $?
+for k in 16 24 32 48; do  # --k takes one k per level, so one run per budget
+  [ -f results/route_budget8k_k$k.jsonl ] && continue
+  python experiments/select_gate.py --ckpts runs/oc_L1/adapters.pt --k $k --raw_window 2048 \
+    --coarse --modes decode all --out results/route_budget8k_k$k.tmp \
+    >> logs/route_budget8k.log 2>&1 || exit $?
+  mv results/route_budget8k_k$k.tmp results/route_budget8k_k$k.jsonl
+done
 echo "=== ROUTEBUDGET DONE $(date +%T)"
