@@ -425,3 +425,7 @@ R34,route_amortize_gate32h_mlp_r256,0,beam_32k_heldout,0.546,e35ac36,2026-11-26
 R34,route_amortize_gate32h_mlp_r256,0,beam_32k_train,0.599,e35ac36,2026-11-26
 R34,route_amortize_gate32h_mlp_kids_r256,0,beam_32k_heldout,0.615,e35ac36,2026-11-26
 R34,route_amortize_gate32h_mlp_kids_r256,0,beam_32k_train,0.661,e35ac36,2026-11-26
+R34,route_amortize_gate32h_mlp_kids_r256_80ctx,0,beam_32k_heldout,0.627,c1ca43d,2026-11-26
+R34,route_amortize_gate32h_mlp_kids_r512_80ctx,0,beam_32k_heldout,0.630,c1ca43d,2026-11-26
+R34,route_amortize_gate32h_mlp_kids_r256_m2_80ctx,0,beam_32k_heldout,0.639,c1ca43d,2026-11-26
+R34,route_amortize_gate32h_mlp_kids_r256_m4_80ctx,0,beam_32k_heldout,0.642,c1ca43d,2026-11-26
