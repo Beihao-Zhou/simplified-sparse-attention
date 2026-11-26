@@ -1,0 +1,25 @@
+experiments/route_amortize.py
+  s_466735a13fa48a::t_bc60b530f59534 218-220
+  s_466735a13fa48a::t_33cce7a2d97385 260-262
+  s_466735a13fa48a::t_df22d28f5a7010 91-111,114
+  s_466735a13fa48a::t_c524d9994a261b 277
+  s_466735a13fa48a::t_329fcb52f0dbe0 6-7,9-10,141-174
+experiments/route_mlp32k_run.sh
+  s_466735a13fa48a::t_34ef83b9415079 1-14
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "e35ac36d68c98cbb79ec4c12cd17fdd1ab2556a1",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
