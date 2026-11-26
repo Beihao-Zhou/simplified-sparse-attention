@@ -139,16 +139,19 @@ class RouteKey(torch.nn.Module):
 
 
 class RouteMLP(torch.nn.Module):
-    """Non-linear routing key: h = gelu(W1 f + b1), delta key RoPE(B h), delta bias v . h + c[l].
-    f is x ("mlp") or [x, mean x of the node's children] ("mlp_kids"). B, v, c start at 0."""
+    """Non-linear routing key: h = gelu(W1 f + b1), m delta keys RoPE(B_j h), delta bias
+    v . h + c[l]; score logsumexp_j q . (k_gist + dk_j) (route_fit's fit{m} form). f is x ("mlp")
+    or [x, mean x of the node's children] ("mlp_kids"). v, c start at 0, and B too for m = 1
+    (step 0 is then the learned router); for m > 1 B starts small and random, since identical
+    keys under logsumexp get identical gradients and never separate."""
 
-    def __init__(self, hidden, d, r, levels, kids):
+    def __init__(self, hidden, d, r, levels, kids, m=1):
         super().__init__()
         self.kids = kids
         f = hidden * (2 if kids else 1)
         self.norm = torch.nn.LayerNorm(f)
         self.W1 = torch.nn.Linear(f, r)
-        self.B = torch.nn.Parameter(torch.zeros(d, r))
+        self.B = torch.nn.Parameter(torch.zeros(m, d, r) if m == 1 else 0.01 * torch.randn(m, d, r))
         self.v = torch.nn.Parameter(torch.zeros(r))
         self.c = torch.nn.Parameter(torch.zeros(levels))
 
@@ -158,18 +161,22 @@ class RouteMLP(torch.nn.Module):
         if self.kids:
             f = torch.cat([f, ctx["kids"][l][layer]], -1)
         h = torch.nn.functional.gelu(self.W1(self.norm(f)))              # [G, r]
-        dk = h @ self.B.t()
-        dk = dk * ctx["cos"][l] + rotate_half(dk) * ctx["sin"][l]
+        dk = torch.einsum("gr,mdr->gmd", h, self.B)                       # [G, m, d]
+        cos, sin = ctx["cos"][l][:, None], ctx["sin"][l][:, None]
+        dk = dk * cos + rotate_half(dk) * sin
         b = grp["b"][l] + self.c[l] + h @ self.v
-        return score(grp["q"], (grp["k"][l] + dk)[:, None], b, scaling)
+        return score(grp["q"], grp["k"][l][:, None] + dk, b, scaling)
 
 
 def make_router(name, hidden, d, levels):
-    """linear_r{r} | mlp_r{r} | mlp_kids_r{r}"""
+    """linear_r{r} | mlp_r{r}[_m{m}] | mlp_kids_r{r}[_m{m}] (m keys per node)"""
+    m = 1
+    if "_m" in name.rsplit("_r", 1)[1]:
+        name, m = name.rsplit("_m", 1)
     kind, r = name.rsplit("_r", 1)
     if kind == "linear":
         return RouteKey(hidden, d, int(r), levels)
-    return RouteMLP(hidden, d, int(r), levels, kids=kind == "mlp_kids")
+    return RouteMLP(hidden, d, int(r), levels, kids=kind == "mlp_kids", m=int(m))
 
 
 def ce(s, mass, free):
