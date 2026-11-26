@@ -1,0 +1,37 @@
+results/route_head32k_mlp_kids_r256_1_2_3_4_5.jsonl
+  s_466735a13fa48a::t_5d4258c0e9b40b 1-20
+results/route_head32k_mlp_kids_r256_6_7_8_9_10.jsonl
+  s_466735a13fa48a::t_5d4258c0e9b40b 1-20
+results/route_head32k_smoke_untrained.jsonl
+  s_466735a13fa48a::t_5d4258c0e9b40b 1-2
+results/route_head32k_mlp_kids_r256_16_17_18_19_20.jsonl
+  s_466735a13fa48a::t_5d4258c0e9b40b 1-20
+results/route_head32k_mlp_kids_r256_k16.jsonl
+  s_466735a13fa48a::t_5d4258c0e9b40b 1-3
+results/route_head32k_mlp_kids_r256_k16_48.jsonl
+  s_466735a13fa48a::t_5d4258c0e9b40b 1-3
+results/route_head32k_mlp_kids_r256_21_22_23.jsonl
+  s_466735a13fa48a::t_5d4258c0e9b40b 1-12
+results/route_head32k_mlp_kids_r256_11_12_13_14_15.jsonl
+  s_466735a13fa48a::t_5d4258c0e9b40b 1-20
+results/route_head32k_smoke_none.jsonl
+  s_466735a13fa48a::t_5d4258c0e9b40b 1-2
+results/spikes.csv
+  s_466735a13fa48a::t_f7a54fd31eb399 432-445
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "9b91d3e6fda47f6c5d1ca709e78a42f6eec00c3f",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
