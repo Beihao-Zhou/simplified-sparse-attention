@@ -1,0 +1,30 @@
+gist_route.py
+  s_466735a13fa48a::t_8774d22599c494 1-151
+gist_beam.py
+  s_466735a13fa48a::t_2e03efbab61807 162-163,179-184
+gist_select_train.py
+  s_466735a13fa48a::t_2e03efbab61807 150-151,156-159,186-187,195-197,207,211
+tests/test_route_head.py
+  s_466735a13fa48a::t_7e32f2e14fb97f 1-76,79,83-90
+  s_466735a13fa48a::t_de08600dae3e04 77-78,80-82
+gist_flex_attention.py
+  s_466735a13fa48a::t_2e03efbab61807 261-264,267,273-274
+experiments/route_amortize.py
+  s_466735a13fa48a::t_2a91689ca31e61 36,92-94,125-126,130,135,137-140,200,227,258-263,268-269
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "d1b3fe35e89da0a86c15107b39ef6da5e6ba3a63",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
