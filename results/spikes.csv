@@ -355,3 +355,8 @@ R34,oc_L1_coarse_hybrid_orcchildren16_l1_step150,0,passkey_back_all_8k,0.6,377fd
 R34,oc_L1_coarse_hybrid_orcchildren16_l1_step150,0,route_fit_learned_beam_8k,0.754,377fdf5,2026-11-25
 R34,oc_L1_coarse_hybrid_orcchildren16_l1_step150,0,route_fit_learned_hit_8k,0.53,377fdf5,2026-11-25
 R34,oc_L1_coarse_hybrid_orcchildren16_l1_step150,0,route_fit_fit1_beam_8k,0.947,377fdf5,2026-11-25
+R34,route_amortize_oc_L1_learned,0,beam_8k_heldout,0.755,cc9191c,2026-11-25
+R34,route_amortize_oc_L1_r8_1500steps,0,beam_8k_heldout,0.793,cc9191c,2026-11-25
+R34,route_amortize_oc_L1_r8_1500steps,0,beam_8k_train,0.805,cc9191c,2026-11-25
+R34,route_amortize_oc_L1_r64_1500steps,0,beam_8k_heldout,0.796,cc9191c,2026-11-25
+R34,route_amortize_oc_L1_r64_1500steps,0,beam_8k_train,0.811,cc9191c,2026-11-25
