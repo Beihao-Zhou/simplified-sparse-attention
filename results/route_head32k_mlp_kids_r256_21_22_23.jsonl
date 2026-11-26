@@ -1,0 +1,12 @@
+{"ckpt": "runs/gate32h/adapters.pt", "layer": 21, "group": 0, "model": "learned", "beam": 0.3934927761554718, "hit": [false, false, false, true, true]}
+{"ckpt": "runs/gate32h/adapters.pt", "layer": 21, "group": 0, "model": "mlp_kids_r256", "beam": 0.5841141283512116, "beam_train": 0.6572267770767212, "hit": [false, false, true, true, true], "final_loss": 5.055215835571289}
+{"ckpt": "runs/gate32h/adapters.pt", "layer": 21, "group": 1, "model": "learned", "beam": 0.4309457540512085, "hit": [false, false, false, true, true]}
+{"ckpt": "runs/gate32h/adapters.pt", "layer": 21, "group": 1, "model": "mlp_kids_r256", "beam": 0.5710098087787628, "beam_train": 0.6259159564971923, "hit": [false, false, false, true, true], "final_loss": 3.9694509506225586}
+{"ckpt": "runs/gate32h/adapters.pt", "layer": 22, "group": 0, "model": "learned", "beam": 0.5148296117782593, "hit": [false, false, false, false, true]}
+{"ckpt": "runs/gate32h/adapters.pt", "layer": 22, "group": 0, "model": "mlp_kids_r256", "beam": 0.7326829671859741, "beam_train": 0.7522704482078553, "hit": [false, false, false, false, true], "final_loss": 5.137732982635498}
+{"ckpt": "runs/gate32h/adapters.pt", "layer": 22, "group": 1, "model": "learned", "beam": 0.3984041154384613, "hit": [false, false, false, false, true]}
+{"ckpt": "runs/gate32h/adapters.pt", "layer": 22, "group": 1, "model": "mlp_kids_r256", "beam": 0.6220460295677185, "beam_train": 0.6553714632987976, "hit": [false, false, false, true, true], "final_loss": 5.03300666809082}
+{"ckpt": "runs/gate32h/adapters.pt", "layer": 23, "group": 0, "model": "learned", "beam": 0.5217776656150818, "hit": [false, false, true, false, true]}
+{"ckpt": "runs/gate32h/adapters.pt", "layer": 23, "group": 0, "model": "mlp_kids_r256", "beam": 0.6659280180931091, "beam_train": 0.6957663774490357, "hit": [false, false, true, false, true], "final_loss": 4.947457313537598}
+{"ckpt": "runs/gate32h/adapters.pt", "layer": 23, "group": 1, "model": "learned", "beam": 0.4292315304279327, "hit": [false, false, false, false, true]}
+{"ckpt": "runs/gate32h/adapters.pt", "layer": 23, "group": 1, "model": "mlp_kids_r256", "beam": 0.6579989910125732, "beam_train": 0.6740698933601379, "hit": [false, false, false, false, true], "final_loss": 5.2042622566223145}

@@ -1,0 +1,20 @@
+{"ckpt": "runs/gate32h/adapters.pt", "layer": 6, "group": 0, "model": "learned", "beam": 0.5508931756019593, "hit": [false, false, false, false, true]}
+{"ckpt": "runs/gate32h/adapters.pt", "layer": 6, "group": 0, "model": "mlp_kids_r256", "beam": 0.6990207433700562, "beam_train": 0.7428611636161804, "hit": [false, false, false, false, true], "final_loss": 5.182173728942871}
+{"ckpt": "runs/gate32h/adapters.pt", "layer": 6, "group": 1, "model": "learned", "beam": 0.5439951419830322, "hit": [false, false, false, false, true]}
+{"ckpt": "runs/gate32h/adapters.pt", "layer": 6, "group": 1, "model": "mlp_kids_r256", "beam": 0.6749572157859802, "beam_train": 0.7562512755393982, "hit": [false, false, true, false, true], "final_loss": 3.9584732055664062}
+{"ckpt": "runs/gate32h/adapters.pt", "layer": 7, "group": 0, "model": "learned", "beam": 0.6925836503505707, "hit": [false, false, false, false, true]}
+{"ckpt": "runs/gate32h/adapters.pt", "layer": 7, "group": 0, "model": "mlp_kids_r256", "beam": 0.7557729482650757, "beam_train": 0.8093827962875366, "hit": [false, false, false, false, true], "final_loss": 3.6223466396331787}
+{"ckpt": "runs/gate32h/adapters.pt", "layer": 7, "group": 1, "model": "learned", "beam": 0.5452978849411011, "hit": [false, false, false, false, true]}
+{"ckpt": "runs/gate32h/adapters.pt", "layer": 7, "group": 1, "model": "mlp_kids_r256", "beam": 0.6828494906425476, "beam_train": 0.7168575406074524, "hit": [true, false, false, false, true], "final_loss": 4.4703850746154785}
+{"ckpt": "runs/gate32h/adapters.pt", "layer": 8, "group": 0, "model": "learned", "beam": 0.6387914419174194, "hit": [false, false, false, false, true]}
+{"ckpt": "runs/gate32h/adapters.pt", "layer": 8, "group": 0, "model": "mlp_kids_r256", "beam": 0.7489806056022644, "beam_train": 0.7878779649734498, "hit": [false, false, false, false, true], "final_loss": 4.327438831329346}
+{"ckpt": "runs/gate32h/adapters.pt", "layer": 8, "group": 1, "model": "learned", "beam": 0.32902336716651914, "hit": [false, false, false, false, true]}
+{"ckpt": "runs/gate32h/adapters.pt", "layer": 8, "group": 1, "model": "mlp_kids_r256", "beam": 0.4932830035686493, "beam_train": 0.548706591129303, "hit": [false, false, false, false, true], "final_loss": 4.214566230773926}
+{"ckpt": "runs/gate32h/adapters.pt", "layer": 9, "group": 0, "model": "learned", "beam": 0.5785389482975006, "hit": [false, false, false, false, true]}
+{"ckpt": "runs/gate32h/adapters.pt", "layer": 9, "group": 0, "model": "mlp_kids_r256", "beam": 0.6998225450515747, "beam_train": 0.7591233849525452, "hit": [true, false, true, true, true], "final_loss": 4.521937370300293}
+{"ckpt": "runs/gate32h/adapters.pt", "layer": 9, "group": 1, "model": "learned", "beam": 0.24463268220424653, "hit": [false, false, false, true, true]}
+{"ckpt": "runs/gate32h/adapters.pt", "layer": 9, "group": 1, "model": "mlp_kids_r256", "beam": 0.38573105335235597, "beam_train": 0.4254068613052368, "hit": [false, false, true, false, true], "final_loss": 4.827428817749023}
+{"ckpt": "runs/gate32h/adapters.pt", "layer": 10, "group": 0, "model": "learned", "beam": 0.6475665748119355, "hit": [false, false, false, false, true]}
+{"ckpt": "runs/gate32h/adapters.pt", "layer": 10, "group": 0, "model": "mlp_kids_r256", "beam": 0.7390971779823303, "beam_train": 0.802681827545166, "hit": [false, false, true, false, true], "final_loss": 4.616350173950195}
+{"ckpt": "runs/gate32h/adapters.pt", "layer": 10, "group": 1, "model": "learned", "beam": 0.5632460415363312, "hit": [false, false, false, false, true]}
+{"ckpt": "runs/gate32h/adapters.pt", "layer": 10, "group": 1, "model": "mlp_kids_r256", "beam": 0.7061840295791626, "beam_train": 0.7672712087631226, "hit": [false, false, false, false, true], "final_loss": 4.585454940795898}

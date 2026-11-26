@@ -429,3 +429,17 @@ R34,route_amortize_gate32h_mlp_kids_r256_80ctx,0,beam_32k_heldout,0.627,c1ca43d,
 R34,route_amortize_gate32h_mlp_kids_r512_80ctx,0,beam_32k_heldout,0.630,c1ca43d,2026-11-26
 R34,route_amortize_gate32h_mlp_kids_r256_m2_80ctx,0,beam_32k_heldout,0.639,c1ca43d,2026-11-26
 R34,route_amortize_gate32h_mlp_kids_r256_m4_80ctx,0,beam_32k_heldout,0.642,c1ca43d,2026-11-26
+R34,route_head32k_mlp_kids_r256_L1-23,0,beam_32k_heldout_learned,0.517,e0c2f45,2026-11-26
+R34,route_head32k_mlp_kids_r256_L1-23,0,beam_32k_heldout,0.668,e0c2f45,2026-11-26
+R34,gate32h_routehead_k16_decode,0,kl_32k,0.211,e0c2f45,2026-11-26
+R34,gate32h_routehead_k16_decode,0,passkey_front,0.07,e0c2f45,2026-11-26
+R34,gate32h_routehead_k16_decode,0,passkey_back,0.33,e0c2f45,2026-11-26
+R34,gate32h_routehead_k16_all,0,kl_32k,0.183,e0c2f45,2026-11-26
+R34,gate32h_routehead_k16_all,0,passkey_front,0.20,e0c2f45,2026-11-26
+R34,gate32h_routehead_k16_all,0,passkey_back,0.53,e0c2f45,2026-11-26
+R34,gate32h_routehead_k16_48_decode,0,kl_32k,0.124,e0c2f45,2026-11-26
+R34,gate32h_routehead_k16_48_decode,0,passkey_front,0.00,e0c2f45,2026-11-26
+R34,gate32h_routehead_k16_48_decode,0,passkey_back,0.33,e0c2f45,2026-11-26
+R34,gate32h_routehead_k16_48_all,0,kl_32k,0.084,e0c2f45,2026-11-26
+R34,gate32h_routehead_k16_48_all,0,passkey_front,0.33,e0c2f45,2026-11-26
+R34,gate32h_routehead_k16_48_all,0,passkey_back,0.53,e0c2f45,2026-11-26

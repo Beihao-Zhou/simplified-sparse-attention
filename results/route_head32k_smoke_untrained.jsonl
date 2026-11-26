@@ -1,0 +1,2 @@
+{"ckpt": "runs/gate32h/adapters.pt", "mode": "decode", "k": [16], "merge": "union", "coarse": true, "oracle": false, "route_heads": ["runs/route_heads/untrained.pt"], "len": 32768, "tail": 1024, "kl": 0.3142296224832535, "passkey_front": 0.0, "passkey_back": 0.4, "n_kl": 2, "n_passkey": 10}
+{"ckpt": "runs/gate32h/adapters.pt", "mode": "teacher", "k": [16], "merge": "union", "coarse": true, "oracle": false, "route_heads": ["runs/route_heads/untrained.pt"], "len": 32768, "tail": 1024, "kl": 0.0, "passkey_front": 1.0, "passkey_back": 1.0, "n_kl": 0, "n_passkey": 10}
