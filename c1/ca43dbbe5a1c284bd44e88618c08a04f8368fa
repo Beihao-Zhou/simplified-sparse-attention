@@ -1,0 +1,24 @@
+experiments/route_mkey32k_run.sh
+  s_466735a13fa48a::t_5cb103904159da 3,10
+experiments/route_amortize.py
+  s_466735a13fa48a::t_5cb103904159da 89-91,157,173,177
+  s_466735a13fa48a::t_64c3dc8f4b21bf 178
+experiments/select_gate.py
+  s_466735a13fa48a::t_33729e8791ebe9 82-83,99-103,165
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "c1ca43dbbe5a1c284bd44e88618c08a04f8368fa",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
