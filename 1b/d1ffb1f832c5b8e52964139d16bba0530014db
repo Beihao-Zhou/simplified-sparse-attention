@@ -1,0 +1,20 @@
+experiments/route_budget_run.sh
+  s_466735a13fa48a::t_adff22e0eefe01 3-6,13,19-22
+  s_466735a13fa48a::t_a13c1c6e43b43e 23
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "1bd1ffb1f832c5b8e52964139d16bba0530014db",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
