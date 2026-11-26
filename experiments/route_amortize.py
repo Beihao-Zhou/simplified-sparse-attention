@@ -3,9 +3,11 @@
 fit1 (route_fit.py) fits every node's key per context, so it is a ceiling, not a model.
 A separate routing key must be one projection for all contexts:
 
-    score = q . (k_gist + RoPE(B A x)) * scaling + beta + c[l] + w . x
+    score = q . (k_gist + RoPE(B A x)) * scaling + beta + c[l] + w . x       (linear)
+    h = gelu(W1 f), score = q . (k_gist + RoPE(B h)) * scaling + beta + c[l] + v . h (mlp)
 
-x is the summary's attention input, k_gist and beta the checkpoint's (B, w, c start at 0,
+f is x, or x and the mean x of the node's children (mlp_kids); all of it is known at prefill,
+so any of these keys can be stored per node. x is the summary's attention input, k_gist and beta the checkpoint's (B, w, c start at 0,
 so step 0 is the learned router). The model is frozen; per layer and KV group only
 (A, B, w, c) are fitted, on contexts from --train_docs, by route_fit's loss (cross entropy
 to the true mass over the free nodes of each level). Scored on contexts from --docs, as
@@ -86,8 +88,30 @@ def collect(model, tok, recorder, docs, args, reps, layers, n_q, scaling):
                     groups.append({"q": q, "mass": mass, "k": [K[gi][gp] for gp in tree.gpos],
                                    "b": [b[gp] for gp in tree.gpos]})
                 per_layer[layer] = groups
+            # kids[l][layer]: mean x of each node's children (level l-1 summaries; raw tokens
+            # for leaves), also known at prefill, so a key built from it can be stored per node
+            comp = tree.compressible & (tree.leaf >= 0) & (tree.leaf < tree.gpos[0].numel())
+            kids = []
+            for lv in range(L):
+                kd = {}
+                for layer in layers:
+                    xl = recorder.x[layer]
+                    if lv == 0:
+                        src, par = xl[comp], tree.leaf[comp]
+                    else:
+                        src = xl[tree.gpos[lv - 1]]
+                        par = torch.arange(src.shape[0], device=ids.device) // cfg_fanout
+                    G = tree.gpos[lv].numel()
+                    keep = par < G
+                    s = torch.zeros(G, src.shape[1], device=ids.device).index_add_(
+                        0, par[keep], src[keep])
+                    n = torch.zeros(G, device=ids.device).index_add_(
+                        0, par[keep], torch.ones_like(par[keep], dtype=torch.float))
+                    kd[layer] = s / n.clamp_min(1)[:, None]
+                kids.append(kd)
             out.append({"tree": tree, "rows": rows, "free": free, "n_ret": ret.numel(),
                         "key_leaf": key_leaf, "layers": per_layer, "depth": depth, "rep": rep,
+                        "kids": kids,
                         "x": [{l: recorder.x[l][gp] for l in layers} for gp in tree.gpos],
                         "cos": [cos[rope_pos[gp]] for gp in tree.gpos],
                         "sin": [sin[rope_pos[gp]] for gp in tree.gpos]})
@@ -112,6 +136,40 @@ class RouteKey(torch.nn.Module):
         dk = dk * cos + rotate_half(dk) * sin
         b = grp["b"][l] + self.c[l] + x @ self.w
         return score(grp["q"], (grp["k"][l] + dk)[:, None], b, scaling)  # [n, h, G]
+
+
+class RouteMLP(torch.nn.Module):
+    """Non-linear routing key: h = gelu(W1 f + b1), delta key RoPE(B h), delta bias v . h + c[l].
+    f is x ("mlp") or [x, mean x of the node's children] ("mlp_kids"). B, v, c start at 0."""
+
+    def __init__(self, hidden, d, r, levels, kids):
+        super().__init__()
+        self.kids = kids
+        f = hidden * (2 if kids else 1)
+        self.norm = torch.nn.LayerNorm(f)
+        self.W1 = torch.nn.Linear(f, r)
+        self.B = torch.nn.Parameter(torch.zeros(d, r))
+        self.v = torch.nn.Parameter(torch.zeros(r))
+        self.c = torch.nn.Parameter(torch.zeros(levels))
+
+    def scores(self, ctx, layer, gi, l, scaling):
+        grp = ctx["layers"][layer][gi]
+        f = ctx["x"][l][layer]
+        if self.kids:
+            f = torch.cat([f, ctx["kids"][l][layer]], -1)
+        h = torch.nn.functional.gelu(self.W1(self.norm(f)))              # [G, r]
+        dk = h @ self.B.t()
+        dk = dk * ctx["cos"][l] + rotate_half(dk) * ctx["sin"][l]
+        b = grp["b"][l] + self.c[l] + h @ self.v
+        return score(grp["q"], (grp["k"][l] + dk)[:, None], b, scaling)
+
+
+def make_router(name, hidden, d, levels):
+    """linear_r{r} | mlp_r{r} | mlp_kids_r{r}"""
+    kind, r = name.rsplit("_r", 1)
+    if kind == "linear":
+        return RouteKey(hidden, d, int(r), levels)
+    return RouteMLP(hidden, d, int(r), levels, kids=kind == "mlp_kids")
 
 
 def ce(s, mass, free):
@@ -157,7 +215,9 @@ def main():
     ap.add_argument("--layers", type=int, nargs="+", default=[2, 8, 14, 20])
     ap.add_argument("--n_rows", type=int, default=512)
     ap.add_argument("--k", type=int, default=16)
-    ap.add_argument("--ranks", type=int, nargs="+", default=[8, 64])
+    ap.add_argument("--routers", nargs="+", default=["linear_r8", "linear_r64"],
+                    help="linear_r{r} | mlp_r{r} | mlp_kids_r{r}")
+    ap.add_argument("--wd", type=float, default=0.0)
     ap.add_argument("--steps", type=int, default=1500)
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--raw_window", type=int, default=0)
@@ -197,9 +257,9 @@ def main():
             write({"ckpt": args.ckpt, "layer": layer, "group": gi, "model": "learned",
                    "beam": sum(r["beam"] for r in base) / len(base),
                    "hit": [r["hit"] for r in base]})
-            for r in args.ranks:
-                rk = RouteKey(hidden, d, r, L).cuda()
-                opt = torch.optim.Adam(rk.parameters(), lr=args.lr)
+            for name in args.routers:
+                rk = make_router(name, hidden, d, L).cuda()
+                opt = torch.optim.AdamW(rk.parameters(), lr=args.lr, weight_decay=args.wd)
                 g = torch.Generator().manual_seed(layer * 10 + gi)
                 for step in range(args.steps):
                     ctx = train[int(torch.randint(len(train), (1,), generator=g))]
@@ -214,7 +274,7 @@ def main():
                                lambda c, l: rk.scores(c, layer, gi, l, scaling), cfg, scaling)
                 tr = evaluate(train[:5], layer, gi,
                               lambda c, l: rk.scores(c, layer, gi, l, scaling), cfg, scaling)
-                write({"ckpt": args.ckpt, "layer": layer, "group": gi, "model": f"route_r{r}",
+                write({"ckpt": args.ckpt, "layer": layer, "group": gi, "model": name,
                        "beam": sum(x["beam"] for x in res) / len(res),
                        "beam_train": sum(x["beam"] for x in tr) / len(tr),
                        "hit": [x["hit"] for x in res], "final_loss": float(loss)})
