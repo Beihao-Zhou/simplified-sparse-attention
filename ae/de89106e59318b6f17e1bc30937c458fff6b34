@@ -1,0 +1,21 @@
+experiments/levelk32k_run.sh
+  s_466735a13fa48a::t_c89d5629a48a4c 1-19
+experiments/levelk8k_run.sh
+  s_466735a13fa48a::t_b92aa74c05bcc1 1-18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "aede89106e59318b6f17e1bc30937c458fff6b34",
+  "prompts": {},
+  "sessions": {
+    "s_466735a13fa48a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c71e882d-8d5c-489b-96c9-1792f4a36b3c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Beihao Zhou <beihaozhou@gmail.com>"
+    }
+  }
+}
