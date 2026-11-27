@@ -191,26 +191,31 @@ spike 全部通过后按顺序执行；每一项的验收标准满足后才进�
 
 **路由标签的变更（2026-11-21 起）。** 此前的路由 KL 把第一个 gist 之前的原始 token 都算进 0 号单元，包括 sink。在 S3 的 L = 2 checkpoint 上（8K），中后层的 sink 占 0 号单元标签的 25–45%，而 sink 永远可见、选它没有意义。现在阶段一和 OPSD 的路由 KL 都排除 sink 和受保护片段（`gist_routing.unit_exclude`）。已训练的 checkpoint 不受影响；`results/spikes.csv` 里 S3、S4b 及之前的路由相关结果都是旧标签下训练的，与之后的 run 比较时要用新标签重训对照组，复现旧结果请 checkout 之前的 commit。
 
-## 当前结论（2026-11-25）
+## 当前结论（2026-11-26）
 
 阶段一的 0.5B 实验之后的状态。数字在 `results/spikes.csv`（D29、R35、R34、B41），每项的表格和判定在对应 issue 里。阶段一配置在 #36 重写 ADR 0003 时定稿；在那之前以本节为准。
 
 **已定（有数据）**
 - **summary 行往下一层传 gist mask 下的输出（`--down hybrid`）。** raw 行仍传 raw 输出，所以 raw 流等于 base 模型，老师不会漂移。8K 下 suffix KL 0.049 → 0.023，decode KL 0.213 → 0.147，passkey 前段第一次不为 0。只把老师换成固定的 base 流（D0）没有效果。seed 1 复现（step 100：0.050 → 0.027）。在 coarse 上单独加 hybrid（ch8_R2H）也一样：suffix KL 0.043 → 0.021，decode KL 0.203 → 0.137，learned router 的 beam mass 0.52 → 0.72（#41）。`--down sel --pairs …:base`（D1）效果相近，取 hybrid，因为它不需要另存 base 流。
 - **可见集合用 coarse（`--select_coarse`），不用 SG+SR。** 未选中的节点作为粗粒度项留在 softmax 里，每个原始 token 恰好表示一次。step 0 时 coarse 的 KL 0.058，SG+SR 12.1；step 150 时 0.043 vs 0.049（#34）。
-- **λ_route 保持 0.1。** λ = 1 时 KL 0.046 → 0.120（#34 R4）。
-- **每个节点一个路由 key。** 32K 下第 3 级，4 个 key 只比 1 个 key 好 0.01（#35）。
+- **32K 的差距几乎全在 router。** gate32h（coarse + hybrid，32K，step 150）用 learned router 时 decode KL 0.379，passkey all 0.13 / 0.33；换成按真实 mass 选择，decode KL 0.054，passkey 0.93 / 0.87，接近老师的 1.00 / 0.93（#34）。
+- **选择用的 key 与 attention 用的 key 解耦（ADR 0004）。** 每层一个 route head（`gist_route.py`），输入是 summary 的 x 和它子节点 x 的均值，输出只给 beam 打分的 key 和 bias；attention 仍用 k_gist 和 β。gate32h 冻结，离线训练 23 层的 head（`mlp_kids_r256`），heldout beam 0.517 → 0.668。端到端 32K，decode KL 在 k 16 时 0.379 → 0.211，在 k (16, 48) 时 0.217 → 0.124，每步读的量不变（#34）。
+- **离线训练的 router 已经饱和，剩下的差距不在容量。** 在 9–17 层上，线性 key 0.498，MLP 0.546，加子节点均值 0.615，再加数据、加宽到 r512、每个节点 2 或 4 个 key，都只多 0.003–0.015（最高 0.642）。逐 context 直接拟合是 0.853（fit1）和 0.914（fit4）。8K 上线性 key 加到 4 倍步数仍是 0.79。所以下一步是在阶段一里联合训练 head，让 summary 本身带上 routing 需要的信息（#44）。
+- **每个节点一个路由 key。** 32K 下第 3 级，4 个 key 只比 1 个好 0.01（#35）；route head 上 m = 4 也只比 m = 1 好 0.015，还要多读 key、走不了 Triton kernel。
+- **上层的 k 可以放大，但预算补不上 router。** 叶子 k 固定 16、上层 k 加到 48，就拿到 k 全部加到 48 时 all KL 降幅的 72%（8K）和 80%（32K）；上层节点本身是 summary，1M 时每步只多读约 0.03% 的上下文。但 32K 上 k 全部加到 48，all KL 仍是 0.135，oracle 在 k 16 时是 0.009（#34）。
+- **routing KL 只比 oracle top-16 父节点的子节点（`--route_scope oracle_children`）时，λ 可以取 1.0。** 8K 上 decode KL 0.137 → 0.124，beam 0.72 → 0.75，收益小；λ 0.1 时与 level scope 相同（#34）。level scope 下 λ 保持 0.1，λ = 1 时 KL 0.046 → 0.120（#34 R4）。
 - **down=raw 不发散，但训的对象不对。** summary 行在训练中读整个前缀，推理时只读它覆盖的内容。hybrid 取代它作为默认（#29、#41）。
 
 **不成立**
 - **训练时每个位置都做选择（`--select_train`）收益很小。** 32K 下同一模式打分，0.148 vs 0.139。之前的 0.247 vs 0.139 是两个 run 评测模式不同（#29）。
 - **训练时每个位置都做选择（`--select_train`）在 hybrid 下也没有收益。** 32K 下 decode KL 都是 0.379，每步慢 34%（gate32hA vs gate32h）。ADR 0003 已修订（#36）。
 - **free-node 路由损失（`--route_free`）没有帮助**（#34 R3）。
-- **把 q 从路由损失里 detach（`--route_detach_q`）没有帮助。** λ = 0.1 时 8K 和 32K 都与不加相同（beam 0.52 / 0.52，0.44 / 0.43）。λ = 1 时 beam 0.32 → 0.37，仍不如 λ = 0.1（#34）。router 学不好的主要原因是 raw 下它打分的 summary 与推理时不同，hybrid 修掉了大部分。
+- **把 q 从路由损失里 detach（`--route_detach_q`）没有帮助。** λ = 0.1 时 8K 和 32K 都与不加相同（beam 0.52 / 0.52，0.44 / 0.43）。λ = 1 时 beam 0.32 → 0.37，仍不如 λ = 0.1（#34）。
+- **线性 routing key 不是没训够。** 步数 4 倍、学习率 3 倍，heldout beam 仍是 0.79（#34）。
 
-**待定（正在跑）**
-- **（已答：是）32K 的差距是不是 router 造成的。** gate32h（coarse + hybrid，32K）稳定：suffix KL 0.064，decode KL 0.379（gate32r_B 0.582）。learned beam 0.44，直接拟合 0.85，passkey 前段仍为 0。`experiments/oracle32h_run.sh` 用真实 mass 选择重跑同一评测：oracle 的 KL 远低于 0.379，就先补 router（候选蒸馏）；接近，就是 summary 本身的问题。
-- **router 的训练目标。** oracle 选择下 gate32h 的 decode KL 0.379 → 0.054，passkey 0.13 → 0.93，32K 的差距几乎全在 router。routing KL 改为只比 oracle top-16 父节点的子节点（`--route_scope oracle_children`，decode 比较的范围），8K 在 VM2 上跑（`experiments/route_oc8k_run.sh`，#34）。
+**待定**
+- **阶段一里联合训练 route head（#44）。** 给 head 单独的 λ，对照两种梯度：只训练 head，以及梯度也回传到 summary。目标是把 32K 的 beam 从 0.67 推向 fit1 的 0.85。
+- **decode 接入 route key（#45）。** prefill 时每个节点存一个 route key，decode 时读它而不是 k_gist；decode 生成的节点要在线维护子节点均值。不做这一步，1M 推理用不上 route head。
 - **7B 阶段二 128K 的 backward 仍然 OOM**（#42）。chunk_mlp 之后 forward 能过，可能还需要整层的 gradient checkpointing。阶段二（#40）等阶段一配置定下来再开始。
 
 **评测时的注意点**
@@ -228,6 +233,8 @@ spike 全部通过后按顺序执行；每一项的验收标准满足后才进�
 **第 2 步：decode 时产生 gist（#13）。** 现在 decode 只在 mask 末尾补 1，生成的部分从不压缩，长推理输出的尾部线性增长且全部可见。改动有四处：decode 接上 `OnlineGistInserter`，每 4 个原始 token 强制喂入一个 gist（不采样，只写 KV），高层按同一规则级联；块关闭后，后续 query 看不到它的原始 token，只能通过展开读到；选择 metadata 缓存从「静态前缀」改成增量追加；OPSD 的 rollout 记录这些 gist 步，replay 带上它们，反向 KL 只在原始 token 上计算。验收的不变式是「边 decode 边插 gist」与「同一序列一次 prefill」的输出在浮点误差内一致。gist 与下一个原始 token 可以放进同一次前向（q_len = 2），避免多出约 33% 的 decode 步。spike 的 SFT 数据在回答部分已经按流式规则插入了 gist，阶段一训练时见过。
 
 **第 3 步：误差累积的 spike（#14）。** S2 测得仅 meta-gist 一级就只保留 43–57% 的 oracle chunk；若每级都丢一半，五级的召回约 6%。在训练过的 L 层模型上，沿用 S2 的方法测 L = 2…5 的逐级 oracle mass 召回（32K–128K），比较三种缓解：高层更宽的 beam（RecSA 每级 256）、没选中的节点作为粗粒度项留在 softmax 中（RecSA 的做法）、每级的路由 KL。逐级召回明显衰减时，先解决路由，再加层。
+
+**1M 时的瓶颈在 routing（2026-11-26）。** 4 层树、raw window 8192 时，每步读 1.2–1.6% 的上下文，主要是顶层的粗粒度项（约 4096 个）和 raw window；上层 k 放大几乎不增加读量。顶层候选 8K 约 24 个、32K 约 96 个、1M 约 4064 个，8K 和 32K 都测不到 1M 的情形。k 固定时，正确节点要从线性增长的候选里排进前 k；k 与候选数之比固定时，只有干扰项独立同分布时召回才与长度无关，而 agent 轨迹重复多、干扰项的尾部更重。RecSA（arXiv 2611.07232，Qwen3-4B，只在 32K 训练，0.62B token）的 RULER 从 32K 的 94.7 掉到 1M 的 60.5，multi-key 任务在 1M 只剩 6.2；k 从 256 加到 512 在所有长度上都更好，去掉 MLP 项在 1M 时掉 23.4 分。所以先补 router（ADR 0004、#44），再加层。
 
 **第 4 步：32K 以外的位置与老师（#15，待定）。** 原始 token 保持原位置，1M 位置超出 Qwen2.5-0.5B 训练过的 32K，需要 RoPE 外推（如 YaRN），且原模型自己也要能读这个长度。OPSD 的老师在 1M 上既贵又不可靠。候选：只在 ≤ 128K 做 OPSD，靠长度无关的树外推到 1M（前提是固定 k，现在的 k = ⌊k_len / 448⌋ + 1 在 1M 时约为 2233）；换到原生 1M 的模型（如 Qwen2.5-7B-Instruct-1M）；长程只用阶段一的局部老师 g<sub>l</sub>:g<sub>l−1</sub>。倾向是前一种加局部老师，在 1M 上用 RULER / NIAH 验证；目标模型与老师路线需要人来定。
 
