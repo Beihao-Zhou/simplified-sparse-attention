@@ -24,8 +24,8 @@ from transformers import AutoTokenizer, Qwen2ForCausalLM
 
 import gist_flex_attention
 import gist_resume
-from gist_opsd_long import plain_hidden
 from gist_lora import apply_lora, apply_summary_bias, summary_spans
+from gist_opsd_long import plain_hidden
 from gist_qwen2 import GistQwen2ForCausalLM
 from gist_utils import Global_data, add_gist_tokens
 from src.data.gist_stream import gist_segments, reinsert_gists, stream_labels
@@ -74,6 +74,17 @@ def parse_args(argv=None):
         "oracle parents (gist_routing.py)",
     )
     ap.add_argument("--route_oracle_k", type=int, default=256)
+    ap.add_argument("--lambda_head", type=float, default=0.0,
+                    help="#44: weight of the route heads' routing KL (gist_route.py); > 0 attaches "
+                    "heads (--head_init, or untrained) to every layer but 0 and trains them")
+    ap.add_argument("--head_rows", type=int, default=32, help="sampled rows per sequence")
+    ap.add_argument("--head_grad", choices=["head", "summary"], default="head",
+                    help="head: only the heads learn from their loss; summary: also the "
+                    "summaries' x, through the heads")
+    ap.add_argument("--head_r", type=int, default=256)
+    ap.add_argument("--head_lr", type=float, default=1e-3)
+    ap.add_argument("--head_init", nargs="*", default=[],
+                    help="heads to start from (route_amortize.py --save), merged by layer")
     ap.add_argument("--heldout_frac", type=float, default=None,
                     help="agent data: issues held out (default experiments/agent_data.py's); a "
                     "larger fraction holds out a superset (#37: 0.3 for the long eval sets)")
@@ -193,7 +204,9 @@ def stage1_config(args, pairs=None, down=None):
         "route_oracle_k": getattr(args, "route_oracle_k", 256),
         "route_free": getattr(args, "route_free", False),
         "route_detach_q": getattr(args, "route_detach_q", False),
-        "weights": {"route": args.lambda_route},
+        "head_rows": args.head_rows if getattr(args, "lambda_head", 0) > 0 else 0,
+        "head_grad": getattr(args, "head_grad", "head"),
+        "weights": {"route": args.lambda_route, "route_head": getattr(args, "lambda_head", 0.0)},
     }
 
 
@@ -348,6 +361,21 @@ def group_grad_norms(model):
     return out
 
 
+def attach_heads(model, args):
+    """#44: route heads on every layer but 0, from --head_init where given, else untrained
+    (they then rank as the model does); returns their parameters."""
+    from gist_route import attach_route_heads, make_route_heads
+
+    layers = range(1, len(model.model.layers))
+    saved = make_route_heads(model, layers, args.head_r)
+    for path in args.head_init:
+        init = torch.load(path, map_location="cpu", weights_only=False)
+        assert init["config"] == saved["config"], (init["config"], saved["config"])
+        saved["layers"].update({int(i): st for i, st in init["layers"].items()})
+    attach_route_heads(model, saved)
+    return [p for i in layers for p in model.model.layers[i].self_attn.route_head.parameters()]
+
+
 def main(argv=None):
     args = parse_args(argv)
     torch.manual_seed(args.seed)
@@ -373,18 +401,19 @@ def main(argv=None):
         assert not unexpected, unexpected
         with torch.no_grad():
             model.get_input_embeddings().weight[gist_ids] = ck["state"]["gist_embed"].cuda()
+    groups["head"] = attach_heads(model, args) if args.lambda_head > 0 else []
     model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     model.config.use_cache = False
     model.train()
     params = [p for k in ("lora_qo", "lora_kv", "embed", "beta") for p in groups[k]]
-    opt = torch.optim.AdamW(
-        [
-            {"params": groups["lora_qo"] + groups["lora_kv"]},
-            {"params": groups["embed"] + groups["beta"]},
-        ],
-        lr=args.lr,
-        weight_decay=0.0,
-    )
+    pgroups = [
+        {"params": groups["lora_qo"] + groups["lora_kv"]},
+        {"params": groups["embed"] + groups["beta"]},
+    ]
+    if groups["head"]:  # its own lr and decay, as route_amortize.py trains heads
+        pgroups.append({"params": groups["head"], "lr": args.head_lr, "weight_decay": 0.01})
+    opt = torch.optim.AdamW(pgroups, lr=args.lr, weight_decay=0.0)
+    base_lrs = [args.lr * args.lr_mult] * 2 + ([args.head_lr] if groups["head"] else [])
     sched = torch.optim.lr_scheduler.LambdaLR(
         opt,
         lambda s: min(1.0, (s + 1) / args.warmup)
@@ -407,9 +436,9 @@ def main(argv=None):
         args.start_step = resumed
         for _ in range(resumed * accum):  # the data order continues where it stopped
             next(it)
-    for g in opt.param_groups:  # after the resume, which restores initial_lr
-        g["initial_lr"] = args.lr * args.lr_mult
-    sched.base_lrs = [args.lr * args.lr_mult] * len(opt.param_groups)
+    for g, lr in zip(opt.param_groups, base_lrs):  # after the resume, which restores initial_lr
+        g["initial_lr"] = lr
+    sched.base_lrs = list(base_lrs)
     for name in args.freeze:
         for p in groups[name]:
             p.requires_grad_(False)
@@ -481,6 +510,8 @@ def main(argv=None):
                 agg[k] = agg.get(k, 0.0) + v / accum
         gn = group_grad_norms(model)
         torch.nn.utils.clip_grad_norm_(params, 1.0)
+        if groups["head"]:
+            gn["head"] = float(torch.nn.utils.clip_grad_norm_(groups["head"], 1.0))
         opt.step()
         sched.step()
         opt.zero_grad(set_to_none=True)
@@ -499,7 +530,7 @@ def main(argv=None):
         if step % args.eval_every == 0 or step == last:
             evaluate(step)
         if step < last and (step % args.save_every == 0 or preempt.requested):
-            gist_resume.save(args.out, step, model, params, opt)
+            gist_resume.save(args.out, step, model, params + groups["head"], opt)
             if preempt.requested:
                 sys.exit(gist_resume.PREEMPTED)
     sd = {
@@ -513,6 +544,11 @@ def main(argv=None):
         os.path.join(args.out, "adapters.pt"),
     )
     print("saved", os.path.join(args.out, "adapters.pt"), flush=True)
+    if groups["head"]:  # for select_gate.py --route_heads
+        from gist_route import saved_route_heads
+
+        torch.save(saved_route_heads(model), os.path.join(args.out, "route_heads.pt"))
+        print("saved", os.path.join(args.out, "route_heads.pt"), flush=True)
 
 
 if __name__ == "__main__":

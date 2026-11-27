@@ -77,12 +77,12 @@ class RouteHead(torch.nn.Module):
         self.cores = torch.nn.ModuleList(cores)
         self.m = cores[0].m
 
-    @torch.no_grad()
     def route(self, x: torch.Tensor, tree: gb.Tree, cos: torch.Tensor, sin: torch.Tensor,
               key: torch.Tensor, beta: Optional[torch.Tensor]):
         """One sequence. x [T, hidden]; cos / sin [T, d]; key [H_kv, T, d] (post-RoPE);
         beta [H_kv, T] or None -> route keys [H_kv, T, m, d] (or [H_kv, T, d] for m = 1) and
-        route bias [H_kv, T]; raw positions keep the model's key and a zero delta."""
+        route bias [H_kv, T]; raw positions keep the model's key and a zero delta.
+        Differentiable in the head (and in x, key, beta unless detached by the caller)."""
         H_kv, T, d = key.shape
         keys = key.float()[:, :, None].expand(H_kv, T, self.m, d).clone()
         bias = (torch.zeros(H_kv, T, device=key.device) if beta is None else beta.float()).clone()
@@ -133,19 +133,84 @@ def selection_inputs(module, key: torch.Tensor, beta: Optional[torch.Tensor], id
     head = getattr(module, "route_head", None)
     if head is None:
         return key, beta
-    from gist_utils import Global_data
-
     cos, sin = module._route_rope
     x = module._route_x
     ks, bs = [], []
-    for b in range(key.shape[0]):
-        tree = gb.build_tree(ids[b], Global_data.gist_token_id, Global_data.sink_size,
-                             None if features is None or features.pinned is None
-                             else features.pinned[b],
-                             None if features is None or features.turn is None
-                             else features.turn[b])
-        k, bias = head.route(x[b], tree, cos[b], sin[b], key[b],
-                             None if beta is None else beta[b])
-        ks.append(k)
-        bs.append(bias)
+    with torch.no_grad():
+        for b in range(key.shape[0]):
+            k, bias = head.route(x[b], _tree(ids, features, b), cos[b], sin[b], key[b],
+                                 None if beta is None else beta[b])
+            ks.append(k)
+            bs.append(bias)
     return torch.stack(ks).to(key.dtype if head.m == 1 else torch.float32), torch.stack(bs)
+
+
+def _tree(ids, features, b):
+    from gist_utils import Global_data
+
+    return gb.build_tree(ids[b], Global_data.gist_token_id, Global_data.sink_size,
+                         None if features is None or features.pinned is None
+                         else features.pinned[b],
+                         None if features is None or features.turn is None
+                         else features.turn[b])
+
+
+def make_route_heads(model, layers, r: int, kids: bool = True, m: int = 1) -> dict:
+    """Untrained heads (rank as the model does) for layers, in attach_route_heads's format."""
+    cfg = model.config
+    d = cfg.hidden_size // cfg.num_attention_heads
+    from gist_utils import Global_data
+
+    L = len(Global_data.gist_token_id)
+    conf = {"hidden": cfg.hidden_size, "d": d, "r": r, "levels": L, "kids": kids, "m": m}
+    return {"config": conf, "layers": {
+        int(i): [RouteCore(cfg.hidden_size, d, r, L, kids, m).state_dict()
+                 for _ in range(cfg.num_key_value_heads)] for i in layers}}
+
+
+def saved_route_heads(model) -> dict:
+    """The attached heads in attach_route_heads's format (for select_gate --route_heads)."""
+    layers, conf = {}, None
+    for i, layer in enumerate(model.model.layers):
+        head = getattr(layer.self_attn, "route_head", None)
+        if head is None:
+            continue
+        c = head.cores[0]
+        conf = {"hidden": c.norm.normalized_shape[0] // (2 if c.kids else 1), "d": c.B.shape[1],
+                "r": c.B.shape[2], "levels": c.c.numel(), "kids": c.kids, "m": c.m}
+        layers[i] = [{k: v.detach().cpu() for k, v in core.state_dict().items()}
+                     for core in head.cores]
+    return {"config": conf, "layers": layers}
+
+
+def head_routing_loss(module, query, key, beta, ids, exclude, rows, scaling, st, features):
+    """Stage 1 (#44): routing KL of the route head's keys against the true subtree mass, on
+    st["head_rows"] random loss rows per sequence, over the free (unforced) nodes as
+    experiments/route_amortize.py trains it. q, k_gist and beta are detached: only the head
+    learns, and with st["head_grad"] == "summary" also the summaries' x (through the head).
+    query [B, H, T, d], key [B, H_kv, T, d], beta [B, H_kv, T] or None (original order)."""
+    from gist_routing import routing_kl
+    from gist_select_train import _features
+    from gist_utils import Global_data
+
+    head = module.route_head
+    assert head.m == 1, "stage-1 head training uses one key per node"
+    cos, sin = module._route_rope
+    x = module._route_x
+    if st.get("head_grad", "head") == "head":
+        x = x.detach()
+    hpg = query.shape[1] // key.shape[1]
+    losses = []
+    for b in range(query.shape[0]):
+        tree, lo, _ = _features(ids, features, b, 0)
+        k, bias = head.route(x[b], tree, cos[b], sin[b], key[b].detach(),
+                             None if beta is None else beta[b].detach())
+        cand = torch.nonzero(rows[b]).flatten()
+        perm = torch.randperm(cand.numel(), device=cand.device)[: st["head_rows"]]
+        pick = cand[perm].sort().values
+        losses.append(routing_kl(
+            query[b][:, pick].detach().float(), pick, k.repeat_interleave(hpg, 0), ids[b],
+            Global_data.gist_token_id, scaling, bias.repeat_interleave(hpg, 0),
+            exclude=None if exclude is None else exclude[b], scope="level", lo_leaf=lo[pick]))
+    return torch.stack(losses).mean()
+

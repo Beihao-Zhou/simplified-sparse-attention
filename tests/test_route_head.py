@@ -88,3 +88,77 @@ def test_rope_matches_the_model_rotation():
     cos, sin = torch.cat([ang.cos()] * 2, -1), torch.cat([ang.sin()] * 2, -1)
     torch.testing.assert_close(rope(dk, cos, sin)[:, 1],
                                dk[:, 1] * cos + rotate_half(dk[:, 1]) * sin)
+
+
+def _module(kids=True, trained=False):
+    """A stand-in attention module as attach_route_heads leaves it, with stage-1 inputs."""
+    from types import SimpleNamespace
+
+    from gist_utils import Global_data
+
+    Global_data.gist_token_id, Global_data.sink_size = GIST, 3
+    Global_data.num_previous_chunks, Global_data.raw_window, Global_data.window_turns = 1, 0, 0
+    ids, tree, x, key, beta, cos, sin = _setup()
+    T = ids.numel()
+    g = torch.Generator().manual_seed(2)
+    mod = SimpleNamespace(route_head=_head(kids, 1, trained), _route_rope=(cos[None], sin[None]),
+                          _route_x=x[None].clone().requires_grad_())
+    query = torch.randn(1, H_KV * HPG, T, D, generator=g)
+    rows = (tree.level < 0)[None] & (torch.arange(T) > 60)[None]
+    feats = SimpleNamespace(pinned=None, turn=None)
+    return mod, ids[None], query, key[None], beta[None], rows, feats
+
+
+def test_untrained_head_loss_is_the_model_keys_routing_kl():
+    from gist_route import head_routing_loss
+    from gist_routing import routing_kl
+    from gist_select_train import _features
+    from gist_utils import Global_data
+
+    mod, ids, q, key, beta, rows, feats = _module()
+    st = {"head_rows": 1000}
+    torch.manual_seed(0)
+    got = head_routing_loss(mod, q, key, beta, ids, None, rows, 0.3, st, feats)
+    _, lo, _ = _features(ids, feats, 0, 0)
+    pick = torch.nonzero(rows[0]).flatten()
+    want = routing_kl(q[0][:, pick], pick, key[0].repeat_interleave(HPG, 0), ids[0],
+                      Global_data.gist_token_id, 0.3, beta[0].repeat_interleave(HPG, 0),
+                      scope="level", lo_leaf=lo[pick])
+    torch.testing.assert_close(got, want)
+
+
+def test_head_loss_trains_the_head_and_x_only_when_asked():
+    from gist_route import head_routing_loss
+
+    for grad in ("head", "summary"):
+        mod, ids, q, key, beta, rows, feats = _module(trained=True)
+        q.requires_grad_()
+        key.requires_grad_()
+        loss = head_routing_loss(mod, q, key, beta, ids, None, rows, 0.3,
+                                 {"head_rows": 16, "head_grad": grad}, feats)
+        loss.backward()
+        assert all(p.grad is not None for p in mod.route_head.parameters())
+        assert q.grad is None and key.grad is None
+        assert (mod._route_x.grad is not None) == (grad == "summary")
+
+
+def test_saved_heads_round_trip():
+    from types import SimpleNamespace
+
+    from gist_route import attach_route_heads, saved_route_heads
+
+    head = _head(True, 1, trained=True)
+    layer = lambda: SimpleNamespace(self_attn=torch.nn.Module())  # noqa: E731
+    src = SimpleNamespace(model=SimpleNamespace(layers=[layer(), layer()]))
+    src.model.layers[1].self_attn.route_head = head
+    saved = saved_route_heads(src)
+    assert list(saved["layers"]) == [1] and saved["config"]["hidden"] == HID
+    proj = torch.nn.Linear(1, 1)
+    dst_attn = [torch.nn.Module(), torch.nn.Module()]
+    for a in dst_attn:
+        a.q_proj = proj
+    dst = SimpleNamespace(model=SimpleNamespace(layers=[SimpleNamespace(self_attn=a)
+                                                        for a in dst_attn]))
+    attach_route_heads(dst, saved)
+    for p, r in zip(head.parameters(), dst_attn[1].route_head.parameters()):
+        assert torch.equal(p, r)

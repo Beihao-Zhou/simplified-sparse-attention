@@ -278,6 +278,13 @@ def gist_flex_attention_forward(
         _stage1_routing(module, query, key_orig, beta, kwargs["gist_input_ids"],
                         kwargs["gist_route_exclude"],
                         kwargs["gist_loss_rows"], scaling, st, kwargs["gist_features"])
+    if st.get("head_rows", 0) > 0 and getattr(module, "route_head", None) is not None:
+        from gist_route import head_routing_loss  # #44: the route head's own routing KL
+        loss = head_routing_loss(module, query, key_orig, beta, kwargs["gist_input_ids"],
+                                 kwargs["gist_route_exclude"], kwargs["gist_loss_rows"], scaling,
+                                 st, kwargs["gist_features"])
+        if _first(st, (module.layer_idx, "route_head")):
+            st["losses"].setdefault("route_head", []).append(loss)
     return out, None
 
 
